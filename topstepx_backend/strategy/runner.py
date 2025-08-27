@@ -24,6 +24,7 @@ from topstepx_backend.core.topics import (
 )
 from topstepx_backend.strategy.base import Strategy
 from topstepx_backend.strategy.context import StrategyContext, RiskLimits
+from topstepx_backend.config.settings import TopstepConfig, get_config
 from topstepx_backend.strategy.registry import StrategyRegistry
 from topstepx_backend.data.types import Bar
 
@@ -32,6 +33,7 @@ if TYPE_CHECKING:
         MarketSubscriptionService,
     )
     from topstepx_backend.data.timeframe_aggregator import TimeframeAggregator
+    from topstepx_backend.services.risk_manager import RiskManager
 
 
 @dataclass
@@ -142,6 +144,8 @@ class StrategyRunner:
         registry: Optional[StrategyRegistry] = None,
         market_subscription_service: Optional["MarketSubscriptionService"] = None,
         timeframe_aggregator: Optional["TimeframeAggregator"] = None,
+        risk_manager: Optional["RiskManager"] = None,
+        config: Optional[TopstepConfig] = None,
     ):
         """
         Initialize strategy runner.
@@ -154,6 +158,8 @@ class StrategyRunner:
         self.registry = registry or StrategyRegistry()
         self.market_subscription_service = market_subscription_service
         self.timeframe_aggregator = timeframe_aggregator
+        self.risk_manager = risk_manager
+        self.config = config or get_config()
         self.logger = logging.getLogger(__name__)
 
         # Strategy instances
@@ -293,10 +299,18 @@ class StrategyRunner:
             # Create risk limits
             risk_config = config.get("risk", {})
             risk_limits = RiskLimits(
-                max_position_size=risk_config.get("max_position_size", 10),
-                max_daily_loss=risk_config.get("max_daily_loss", 1000.0),
-                max_order_size=risk_config.get("max_order_size", 5),
-                max_orders_per_minute=risk_config.get("max_orders_per_minute", 10),
+                max_position_size=risk_config.get(
+                    "max_position_size", self.config.risk_max_position_size
+                ),
+                max_daily_loss=risk_config.get(
+                    "max_daily_loss", self.config.risk_max_daily_loss
+                ),
+                max_order_size=risk_config.get(
+                    "max_order_size", self.config.risk_max_order_size
+                ),
+                max_orders_per_minute=risk_config.get(
+                    "max_orders_per_minute", self.config.risk_max_orders_per_minute
+                ),
             )
 
             # Create strategy context
@@ -308,6 +322,7 @@ class StrategyRunner:
                 contract_id=config["contract_id"],
                 timeframe=config["timeframe"],
                 risk_limits=risk_limits,
+                risk_manager=self.risk_manager,
             )
 
             # Create strategy instance container

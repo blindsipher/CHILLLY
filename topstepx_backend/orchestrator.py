@@ -26,6 +26,7 @@ from topstepx_backend.services.market_subscription_service import MarketSubscrip
 from topstepx_backend.strategy.runner import StrategyRunner
 from topstepx_backend.strategy.registry import StrategyRegistry
 from topstepx_backend.networking.subscription_manager import SubscriptionManager
+from topstepx_backend.services.risk_manager import RiskManager
 
 
 class SystemHealth:
@@ -120,6 +121,7 @@ class TopstepXOrchestrator:
 
         # Trading services
         self.order_service: Optional[OrderService] = None
+        self.risk_manager: Optional[RiskManager] = None
         self.strategy_runner: Optional[StrategyRunner] = None
 
         # System management
@@ -143,6 +145,7 @@ class TopstepXOrchestrator:
             "series_cache_service",
             "market_hub",
             "user_hub",
+            "risk_manager",
             "order_service",
             "strategy_runner",
         ]
@@ -261,6 +264,11 @@ class TopstepXOrchestrator:
             if self.subscription_manager:
                 self.subscription_manager.track_account(self.config.account_id)
 
+            # Initialize risk manager
+            self.risk_manager = RiskManager(self.event_bus, self.config)
+            await self.risk_manager.start()
+            self.health_monitor.update_component_health("risk_manager", "healthy")
+
             # Initialize order service
             self.order_service = OrderService(
                 self.event_bus, self.auth_manager, self.config, self.rate_limiter
@@ -275,6 +283,8 @@ class TopstepXOrchestrator:
                 registry,
                 market_subscription_service=self.market_subscription_service,
                 timeframe_aggregator=self.timeframe_aggregator,
+                risk_manager=self.risk_manager,
+                config=self.config,
             )
             await self.strategy_runner.start()
             self.health_monitor.update_component_health("strategy_runner", "healthy")
