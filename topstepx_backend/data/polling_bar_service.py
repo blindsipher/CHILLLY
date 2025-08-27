@@ -11,7 +11,7 @@ from typing import Optional, Dict, Any, List, TYPE_CHECKING
 from dataclasses import dataclass
 
 from topstepx_backend.config.settings import TopstepConfig
-from topstepx_backend.data.types import Bar
+from topstepx_backend.data.models import Bar
 from topstepx_backend.core.event_bus import EventBus
 from topstepx_backend.core.topics import market_bar, persist_bar_save
 from topstepx_backend.auth.auth_manager import AuthManager
@@ -363,7 +363,7 @@ class PollingBarService:
             if is_partial:
                 # Publish partial bar for charts
                 topic = f"{market_bar(bar.contract_id, bar.timeframe)}_partial"
-                await self.event_bus.publish(topic, bar.to_dict())
+                await self.event_bus.publish(topic, bar.dict())
                 
                 async with self._stats_lock:
                     self._stats["partial_bars_published"] += 1
@@ -373,10 +373,10 @@ class PollingBarService:
                 # Publish finalized bar with dual-publish pattern
                 # 1. Domain event for TimeframeAggregator and strategies
                 market_topic = market_bar(bar.contract_id, bar.timeframe)
-                await self.event_bus.publish(market_topic, bar.to_dict())
+                await self.event_bus.publish(market_topic, bar.dict())
 
                 # 2. Infrastructure command for PersistenceService
-                await self.event_bus.publish(persist_bar_save(), bar.to_dict())
+                await self.event_bus.publish(persist_bar_save(), bar.dict())
 
                 async with self._stats_lock:
                     self._stats["bars_published"] += 1

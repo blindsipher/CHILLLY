@@ -7,7 +7,7 @@ from typing import Dict, Any, Optional, List
 from datetime import datetime
 from dataclasses import dataclass
 from topstepx_backend.core.event_bus import EventBus
-from topstepx_backend.data.types import Bar
+from topstepx_backend.data.models import Bar
 from topstepx_backend.services.contract_service import ContractService
 from topstepx_backend.networking.api_helpers import utc_now
 
@@ -299,7 +299,7 @@ class PersistenceService:
             # Handle direct bar dict from LiveBarBuilder
             if isinstance(payload, dict) and "contract_id" in payload:
                 # Convert single bar dict to Bar object
-                from topstepx_backend.data.types import Bar
+                from topstepx_backend.data.models import Bar
 
                 # Parse timestamp if it's a string
                 if isinstance(payload.get("timestamp"), str):

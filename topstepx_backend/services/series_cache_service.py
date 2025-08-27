@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from collections import deque, defaultdict
 
 from topstepx_backend.config.settings import TopstepConfig
-from topstepx_backend.data.types import Bar
+from topstepx_backend.data.models import Bar
 from topstepx_backend.core.event_bus import EventBus
 from topstepx_backend.networking.api_helpers import utc_now
 

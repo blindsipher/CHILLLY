@@ -11,14 +11,8 @@ from topstepx_backend.auth.auth_manager import AuthManager
 from topstepx_backend.config.settings import TopstepConfig
 from topstepx_backend.networking.api_helpers import auth_headers, utc_now
 from topstepx_backend.networking.rate_limiter import RateLimiter
-from topstepx_backend.data.types import (
-    OrderIntent,
-    OrderAck,
-    OrderStatus,
-    OrderType,
-    OrderSide,
-    TimeInForce,
-)
+from topstepx_backend.data.models import OrderIntent, OrderAck
+from topstepx_backend.data.types import OrderStatus, OrderType, OrderSide, TimeInForce
 from topstepx_backend.core.topics import (
     order_request_submit,
     order_request_cancel,
@@ -338,7 +332,7 @@ class OrderService:
                         timestamp=utc_now(),
                         error_message="Duplicate order (idempotency check)",
                     )
-                    await self.event_bus.publish(order_ack(), ack.to_dict())
+                    await self.event_bus.publish(order_ack(), ack.dict())
                     return
 
             # Build API payload
@@ -372,7 +366,7 @@ class OrderService:
                     timestamp=utc_now(),
                     error_message=str(e),
                 )
-                await self.event_bus.publish(order_ack(), error_ack.to_dict())
+                await self.event_bus.publish(order_ack(), error_ack.dict())
 
     async def _handle_cancel_request(self, payload: Dict[str, Any]) -> None:
         """Handle order cancellation request."""
@@ -464,7 +458,7 @@ class OrderService:
                 timestamp=utc_now(),
                 error_message=error_message,
             )
-            await self.event_bus.publish(order_ack(), ack.to_dict())
+            await self.event_bus.publish(order_ack(), ack.dict())
             self._metrics["orders_acknowledged"] += 1
             self._metrics["last_activity"] = utc_now()
 
@@ -692,7 +686,7 @@ class OrderService:
                 timestamp=utc_now(),
                 error_message=error_message,
             )
-            await self.event_bus.publish(order_ack(), ack.to_dict())
+            await self.event_bus.publish(order_ack(), ack.dict())
             self._metrics["orders_acknowledged"] += 1
             self._metrics["last_activity"] = utc_now()
 
@@ -906,7 +900,7 @@ class OrderService:
                 error_message=error_message,
             )
 
-            await self.event_bus.publish(order_ack(), ack.to_dict())
+            await self.event_bus.publish(order_ack(), ack.dict())
 
             if success:
                 self.logger.info(

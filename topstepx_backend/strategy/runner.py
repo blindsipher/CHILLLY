@@ -26,7 +26,7 @@ from topstepx_backend.strategy.base import Strategy
 from topstepx_backend.strategy.context import StrategyContext, RiskLimits
 from topstepx_backend.config.settings import TopstepConfig, get_config
 from topstepx_backend.strategy.registry import StrategyRegistry
-from topstepx_backend.data.types import Bar
+from topstepx_backend.data.models import Bar
 
 if TYPE_CHECKING:
     from topstepx_backend.services.market_subscription_service import (
@@ -483,54 +483,17 @@ class StrategyRunner:
             )
 
     def _payload_to_bar(self, payload: Any) -> Optional[Bar]:
-        """
-        Convert event payload to Bar object.
-
-        Args:
-            payload: Event payload
-
-        Returns:
-            Bar object or None if conversion failed
-        """
+        """Convert event payload to Bar object."""
         try:
             if isinstance(payload, dict):
-                # Handle both dict and Bar objects
-                from datetime import datetime
-
-                # Parse timestamp
-                timestamp = payload.get("timestamp")
-                if isinstance(timestamp, str):
-                    timestamp = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
-                elif not isinstance(timestamp, datetime):
-                    self.logger.warning(
-                        f"Invalid timestamp in bar payload: {timestamp}"
-                    )
-                    return None
-
-                return Bar(
-                    timestamp=timestamp,
-                    contract_id=payload["contract_id"],
-                    timeframe=payload["timeframe"],
-                    open=float(payload["open"]),
-                    high=float(payload["high"]),
-                    low=float(payload["low"]),
-                    close=float(payload["close"]),
-                    volume=int(payload["volume"]),
-                    source=payload.get("source", "unknown"),
-                    revision=int(payload.get("revision", 1)),
-                )
-
-            elif isinstance(payload, Bar):
+                return Bar(**payload)
+            if isinstance(payload, Bar):
                 return payload
-
-            else:
-                self.logger.warning(f"Unsupported bar payload type: {type(payload)}")
-                return None
-
+            self.logger.warning(f"Unsupported bar payload type: {type(payload)}")
+            return None
         except Exception as e:
             self.logger.error(f"Failed to convert payload to Bar: {e}")
             return None
-
     async def _stop_all_strategies(self) -> None:
         """Stop all strategy instances."""
         for strategy_id, instance in self._strategies.items():

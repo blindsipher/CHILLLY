@@ -4,7 +4,8 @@ import logging
 from dataclasses import dataclass
 from typing import Dict, Any, Optional, TYPE_CHECKING
 
-from topstepx_backend.data.types import OrderIntent, OrderType, OrderSide, TimeInForce
+from topstepx_backend.data.models import OrderIntent
+from topstepx_backend.data.types import OrderType, OrderSide, TimeInForce
 from topstepx_backend.core.topics import order_request_submit
 from topstepx_backend.networking.api_helpers import utc_now
 from topstepx_backend.services.risk_manager import RiskManager
@@ -75,7 +76,7 @@ class StrategyContext:
                 intent.custom_tag = f"{self.strategy_id}_{self._order_count}_{int(utc_now().timestamp())}"
 
             # Publish order intent
-            await self.event_bus.publish(order_request_submit(), intent.to_dict())
+            await self.event_bus.publish(order_request_submit(), intent.dict())
 
             self._order_count += 1
             self._last_order_time = utc_now().timestamp()

@@ -4,7 +4,7 @@ import logging
 from abc import ABC, abstractmethod
 from typing import Dict, Any, TYPE_CHECKING
 
-from topstepx_backend.data.types import Bar
+from topstepx_backend.data.models import Bar
 
 if TYPE_CHECKING:
     from topstepx_backend.strategy.context import StrategyContext

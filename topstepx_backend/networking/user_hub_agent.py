@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from topstepx_backend.networking.hub_agent import HubAgent
 from topstepx_backend.auth.auth_manager import AuthManager
 from topstepx_backend.config.settings import TopstepConfig
+from topstepx_backend.data.models import OrderFill
 
 if TYPE_CHECKING:
     from topstepx_backend.core.event_bus import EventBus
@@ -324,18 +325,17 @@ class UserHubAgent(HubAgent):
                 from topstepx_backend.core.topics import order_fill_update
                 from topstepx_backend.networking.api_helpers import utc_now
 
-                # Convert to order fill event
-                fill_event = {
-                    "order_id": trade.order_id,
-                    "custom_tag": self.order_tag_map.get(trade.order_id),
-                    "price": trade.price,
-                    "size": trade.size,
-                    "fees": trade.fees,
-                    "timestamp": utc_now().isoformat(),
-                    "pnl": trade.profit_and_loss,
-                }
+                fill = OrderFill(
+                    order_id=trade.order_id,
+                    custom_tag=self.order_tag_map.get(trade.order_id),
+                    price=trade.price,
+                    size=trade.size,
+                    fees=trade.fees,
+                    timestamp=utc_now(),
+                    pnl=trade.profit_and_loss,
+                )
 
-                await self.event_bus.publish(order_fill_update(), fill_event)
+                await self.event_bus.publish(order_fill_update(), fill.dict())
 
             # Call registered handlers
             for handler in self.trade_handlers:

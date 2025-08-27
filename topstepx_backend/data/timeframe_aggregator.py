@@ -7,7 +7,7 @@ from typing import Dict, List, Optional
 from dataclasses import dataclass
 
 from topstepx_backend.config.settings import TopstepConfig
-from topstepx_backend.data.types import Bar
+from topstepx_backend.data.models import Bar
 from topstepx_backend.core.event_bus import EventBus
 from topstepx_backend.core.topics import market_bar, boundary, persist_bar_save
 from topstepx_backend.auth.auth_manager import AuthManager
@@ -234,7 +234,7 @@ class TimeframeAggregator:
                 
                 # Publish partial update for charts
                 partial_topic = f"{market_bar(partial_bar.contract_id, timeframe)}_partial"
-                await self._event_bus.publish(partial_topic, partial_aggregated_bar.to_dict())
+                await self._event_bus.publish(partial_topic, partial_aggregated_bar.dict())
                 
                 self.logger.debug(
                     f"Published partial {timeframe} update for {partial_bar.contract_id}"
@@ -295,10 +295,10 @@ class TimeframeAggregator:
             for bar in completed_bars:
                 # 1. Publish domain event for strategies/other consumers
                 market_topic = market_bar(bar.contract_id, bar.timeframe)
-                await self._event_bus.publish(market_topic, bar.to_dict())
+                await self._event_bus.publish(market_topic, bar.dict())
 
                 # 2. Publish infrastructure command for PersistenceService
-                await self._event_bus.publish(persist_bar_save(), bar.to_dict())
+                await self._event_bus.publish(persist_bar_save(), bar.dict())
 
                 self.logger.info(
                     f"Completed {timeframe} bar for {bar.contract_id} at {boundary_timestamp}"
@@ -457,8 +457,8 @@ class TimeframeAggregator:
 
         # Publish with dual-publish pattern
         market_topic = market_bar(completed_bar.contract_id, completed_bar.timeframe)
-        await self._event_bus.publish(market_topic, completed_bar.to_dict())
-        await self._event_bus.publish(persist_bar_save(), completed_bar.to_dict())
+        await self._event_bus.publish(market_topic, completed_bar.dict())
+        await self._event_bus.publish(persist_bar_save(), completed_bar.dict())
 
         # Reset state
         state.bar_count = 0
@@ -604,7 +604,7 @@ class TimeframeAggregator:
                             await self._update_aggregation(bar, timeframe)
 
                         await self._event_bus.publish(
-                            market_bar(contract, "1m"), bar.to_dict()
+                            market_bar(contract, "1m"), bar.dict()
                         )
 
                         async with self._stats_lock:

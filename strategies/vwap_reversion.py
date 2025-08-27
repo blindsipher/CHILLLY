@@ -10,7 +10,7 @@ from typing import Dict, Any, Optional
 
 from topstepx_backend.strategy.base import Strategy
 from topstepx_backend.strategy.context import StrategyContext
-from topstepx_backend.data.types import Bar
+from topstepx_backend.data.models import Bar
 
 
 @dataclass

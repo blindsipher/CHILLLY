@@ -6,7 +6,8 @@ from typing import Dict, Tuple, Any
 from topstepx_backend.core.event_bus import EventBus, Subscription
 from topstepx_backend.core.topics import order_fill_update, account_position_update
 from topstepx_backend.config.settings import TopstepConfig
-from topstepx_backend.data.types import OrderIntent, OrderSide
+from topstepx_backend.data.models import OrderIntent
+from topstepx_backend.data.types import OrderSide
 
 
 @dataclass
