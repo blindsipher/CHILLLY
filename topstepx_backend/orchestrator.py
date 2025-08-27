@@ -89,7 +89,14 @@ class SystemHealth:
 
 
 class TopstepXOrchestrator:
-    """Main orchestrator for TopstepX backend system."""
+    """Main orchestrator for the TopstepX backend system.
+
+    The orchestrator wires together all subsystem services, manages their
+    lifecycle, and exposes a high level API for starting and stopping the
+    trading engine.  It is intentionally opinionated about startup order so that
+    dependencies (for example the :class:`EventBus`) are always available before
+    dependent services begin processing events.
+    """
 
     def __init__(self, config: Optional[TopstepConfig] = None):
         self.config = config or get_config()
@@ -157,21 +164,30 @@ class TopstepXOrchestrator:
         asyncio.create_task(self.shutdown())
 
     async def initialize_services(self):
-        """Initialize all services in dependency order."""
+        """Initialize all services in dependency order.
+
+        The method constructs each service and stores a reference on the
+        orchestrator instance so other components can reach them.  Services are
+        created in a deliberate sequence: foundational utilities such as the
+        rate limiter and authentication manager come first, followed by the
+        event infrastructure, data services, and finally trading modules.
+        """
         self.logger.info("Initializing TopstepX backend services...")
 
         try:
-            # Instantiate core components
+            # --- Core utilities and authentication ---
             self.rate_limiter = RateLimiter()
             self.health_monitor.update_component_health("rate_limiter", "healthy")
 
             self.auth_manager = AuthManager(self.config)
 
+            # --- Event system setup ---
             if self.config.event_backend == "redis":
                 from topstepx_backend.core.redis_event_bus import RedisEventBus
 
                 self.event_bus = RedisEventBus(self.config.redis_url)
             else:
+                # Default to in-memory bus which is adequate for single-process setups
                 self.event_bus = EventBus(default_maxsize=5000)
 
             self.clock = SystemClock(self.event_bus)
@@ -179,6 +195,8 @@ class TopstepXOrchestrator:
                 self.event_bus, self.config.database_path
             )
             self.subscription_manager = SubscriptionManager(self.rate_limiter)
+
+            # --- Data sourcing and transformation services ---
             self.timeframe_aggregator = TimeframeAggregator(
                 self.config, self.event_bus
             )
@@ -198,6 +216,8 @@ class TopstepXOrchestrator:
             self.series_cache_service = SeriesCacheService(
                 self.config, self.event_bus, max_bars_per_series=1000
             )
+
+            # --- Live network connections and trading orchestration ---
             self.market_hub = MarketHubAgent(self.config, self.auth_manager)
             self.user_hub = UserHubAgent(
                 self.config, self.auth_manager, self.event_bus
@@ -206,6 +226,8 @@ class TopstepXOrchestrator:
             self.order_service = OrderService(
                 self.event_bus, self.auth_manager, self.config, self.rate_limiter
             )
+
+            # --- Strategy layer and external API ---
             self.strategy_analytics = StrategyAnalytics(self.event_bus)
             registry = StrategyRegistry()
             self.strategy_runner = StrategyRunner(

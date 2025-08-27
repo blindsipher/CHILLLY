@@ -7,6 +7,22 @@ bootstraps the system, wiring together loosely coupled services over a central
 event bus so that new components or strategies can be added with minimal
 friction.
 
+### Features
+
+CHILLLY aims to be a fully featured research and trading environment. Notable
+characteristics include:
+
+- **Pure Python implementation** that favors readability over micro‑optimizations
+  so that the codebase is easy to extend or audit.
+- **Explicit service boundaries**. Each component encapsulates a single
+  responsibility which simplifies reasoning about behaviour and makes the system
+  amenable to unit testing.
+- **Configurable persistence layer**. SQLite is used by default but the
+  `PersistenceService` is architected so that alternative databases could be
+  integrated with minimal effort.
+- **High level abstractions for strategies** allowing traders to focus on
+  implementing their edge rather than dealing with plumbing code.
+
 ## Architecture Overview
 Independent services communicate exclusively via events:
 
@@ -52,6 +68,21 @@ Independent services communicate exclusively via events:
 - `topstepx_backend/services` – persistence, order management, contract discovery, series caching, and subscription management.
 - `topstepx_backend/strategy` – base strategy interfaces, runtime context, registry, examples, and runner.
 - `tests` – pytest suite for core components.
+
+## Installation
+
+1. Clone this repository and navigate into the project directory.
+2. Create a virtual environment and install dependencies:
+
+   ```bash
+   python -m venv .venv
+   source .venv/bin/activate
+   pip install -r requirements.txt
+   ```
+
+3. Optional development extras (linting, testing) can be installed via
+   `pip install -r requirements-dev.txt` if present. The repository strives to
+   keep external dependencies minimal so the footprint remains lightweight.
 
 ## Configuration
 Create an `.env` file or provide environment variables for authentication and runtime options:
@@ -99,4 +130,12 @@ Run the unit tests with pytest:
 ```
 pytest
 ```
+
+## Development Workflow
+
+- Use `black` or another formatter to maintain a consistent code style.
+- Commit messages should be concise but descriptive; the project uses conventional
+  commits for clarity.
+- The `tests` directory contains unit tests for core components. Feel free to
+  add to the suite when contributing new features or fixing bugs.
 

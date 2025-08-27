@@ -1,4 +1,11 @@
-"""Unified EventBus with topic-based routing and explicit backpressure handling."""
+"""Unified EventBus with topic-based routing and explicit backpressure handling.
+
+This module implements a lightweight message bus used by all services in the
+project.  It provides topic based publish/subscribe semantics, optional wildcard
+matching, and backpressure awareness so that slow consumers cannot overwhelm the
+system.  The implementation deliberately avoids external dependencies so it can
+serve as a drop‑in stand‑alone utility for other projects.
+"""
 
 import asyncio
 import fnmatch
@@ -13,7 +20,19 @@ from dataclasses import dataclass
 
 @dataclass
 class Event:
-    """Event with global sequence ID for ordering guarantees."""
+    """A single published item.
+
+    Attributes
+    ----------
+    ts:
+        UNIX timestamp at creation time.  Used primarily for diagnostics.
+    topic:
+        The topic string that subscribers match on.
+    payload:
+        Arbitrary application data.
+    seq:
+        Global monotonic identifier ensuring total ordering across topics.
+    """
 
     __slots__ = ("ts", "topic", "payload", "seq")
     _seq_gen = itertools.count()
@@ -26,7 +45,14 @@ class Event:
 
 
 class Subscription:
-    """Individual subscription with pattern matching and backpressure handling."""
+    """Individual subscription with pattern matching and backpressure handling.
+
+    Each subscription owns an asyncio queue which acts as the handoff buffer
+    between the publisher and the consumer.  When the queue is full the
+    behaviour depends on the ``critical`` flag: critical subscribers block the
+    publisher while non‑critical ones drop the newest event to keep the system
+    moving.
+    """
 
     __slots__ = ("queue", "pattern", "critical", "_closed", "regex")
 
@@ -74,20 +100,31 @@ class EventBus:
 
         # Worker management
         self._drain_queue: asyncio.Queue[str] = asyncio.Queue()
+        # Tracks which topics currently have pending events so workers aren't
+        # scheduled redundantly.
         self._scheduled_topics: set[str] = set()
+        # Number of concurrent worker tasks that drain topic queues.
         self._worker_concurrency = max(1, worker_concurrency)
         self._worker_tasks: List[asyncio.Task] = []
 
         # Metrics
         self._metrics = {
+            # Total number of events ever published.
             "events_published": 0,
+            # Number of events successfully delivered to a subscriber.
             "events_processed": 0,
+            # Events dropped due to non‑critical subscriber queues being full.
             "events_dropped": 0,
+            # Count of times a publisher had to wait for a critical subscriber.
             "backpressure_blocks": 0,
+            # Current number of active subscriptions.
             "subscriber_count": 0,
+            # Moving averages for performance monitoring.
             "avg_fanout_time_ms": 0.0,
             "avg_worker_lag_ms": 0.0,
+            # Maximum depth observed across all topic queues.
             "max_queue_depth": 0,
+            # Regex compilation statistics for wildcard patterns.
             "avg_regex_compile_time_ms": 0.0,
             "regex_compilations": 0,
         }
