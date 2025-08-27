@@ -5,6 +5,7 @@ import fnmatch
 import time
 import itertools
 import logging
+from contextlib import suppress
 from typing import Any, Dict, List, Optional
 from dataclasses import dataclass
 
@@ -59,13 +60,19 @@ class EventBus:
     - Comprehensive metrics and observability
     """
 
-    def __init__(self, *, default_maxsize: int = 1024):
+    def __init__(self, *, default_maxsize: int = 1024, worker_concurrency: int = 4):
         self.logger = logging.getLogger(__name__)
         self._subs: List[Subscription] = []
         self._topic_fifo: Dict[str, asyncio.Queue] = {}  # topic -> asyncio.Queue
         self._default_maxsize = default_maxsize
         self._lock = asyncio.Lock()
         self._running = False
+
+        # Worker management
+        self._drain_queue: asyncio.Queue[str] = asyncio.Queue()
+        self._scheduled_topics: set[str] = set()
+        self._worker_concurrency = max(1, worker_concurrency)
+        self._worker_tasks: List[asyncio.Task] = []
 
         # Metrics
         self._metrics = {
@@ -75,6 +82,8 @@ class EventBus:
             "backpressure_blocks": 0,
             "subscriber_count": 0,
             "avg_fanout_time_ms": 0.0,
+            "avg_worker_lag_ms": 0.0,
+            "max_queue_depth": 0,
         }
         self._metrics_lock = asyncio.Lock()
 
@@ -136,14 +145,30 @@ class EventBus:
             q = self._topic_fifo.setdefault(topic, asyncio.Queue())
             await q.put(evt)  # Never bounded - bus should not drop
 
-        # Immediate fan-out to enable backpressure from critical subscribers
-        await self._fanout(topic)
+            if topic not in self._scheduled_topics:
+                self._scheduled_topics.add(topic)
+                self._drain_queue.put_nowait(topic)
 
         async with self._metrics_lock:
             self._metrics["events_published"] += 1
+            qsize = q.qsize()
+            if qsize > self._metrics["max_queue_depth"]:
+                self._metrics["max_queue_depth"] = qsize
 
         self.logger.debug(f"Published: {topic} seq={evt.seq}")
         return evt.seq
+
+    async def _worker(self):
+        """Background worker draining topic queues."""
+        while self._running:
+            topic = await self._drain_queue.get()
+            await self._fanout(topic)
+            async with self._lock:
+                q = self._topic_fifo.get(topic)
+                if q and not q.empty():
+                    self._drain_queue.put_nowait(topic)
+                else:
+                    self._scheduled_topics.discard(topic)
 
     async def _fanout(self, topic: str):
         """Fan out events for a specific topic to all matching subscribers."""
@@ -152,10 +177,12 @@ class EventBus:
         try:
             q = self._topic_fifo[topic]
             events_processed = 0
+            total_lag_ms = 0.0
 
             while not q.empty():
                 evt = await q.get()
                 events_processed += 1
+                total_lag_ms += (time.time() - evt.ts) * 1000
 
                 # Snapshot subscribers to avoid iteration issues during unsubscribe
                 async with self._lock:
@@ -175,6 +202,10 @@ class EventBus:
                 current_avg = self._metrics["avg_fanout_time_ms"]
                 self._metrics["avg_fanout_time_ms"] = (
                     current_avg * (count - events_processed) + fanout_time_ms
+                ) / count
+                current_lag = self._metrics["avg_worker_lag_ms"]
+                self._metrics["avg_worker_lag_ms"] = (
+                    current_lag * (count - events_processed) + total_lag_ms
                 ) / count
 
         except Exception as e:
@@ -217,6 +248,8 @@ class EventBus:
         if self._running:
             return
         self._running = True
+        for _ in range(self._worker_concurrency):
+            self._worker_tasks.append(asyncio.create_task(self._worker()))
         self.logger.info("EventBus started")
 
     async def stop(self):
@@ -225,6 +258,12 @@ class EventBus:
             return
 
         self._running = False
+
+        for task in self._worker_tasks:
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+        self._worker_tasks.clear()
 
         # Close all subscriptions
         async with self._lock:
@@ -241,6 +280,7 @@ class EventBus:
                 "running": self._running,
                 "active_topics": len(self._topic_fifo),
                 "total_queue_size": sum(q.qsize() for q in self._topic_fifo.values()),
+                "queue_depths": {topic: q.qsize() for topic, q in self._topic_fifo.items()},
             }
         )
         return base_metrics
