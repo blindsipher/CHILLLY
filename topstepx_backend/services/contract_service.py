@@ -262,6 +262,41 @@ class ContractService:
 
         return None
 
+    async def filter_contracts(
+        self,
+        symbol_prefix: Optional[str] = None,
+        sector: Optional[str] = None,
+        active_only: bool = False,
+    ) -> List[Contract]:
+        """Filter cached contracts by symbol prefix and/or sector.
+
+        Args:
+            symbol_prefix: Return contracts whose symbol starts with this prefix.
+            sector: Limit results to contracts belonging to this sector.
+            active_only: Only include active contracts when True.
+        """
+        if not self._contracts:
+            await self.discover_contracts()
+
+        results: List[Contract] = list(self._contracts.values())
+
+        if symbol_prefix:
+            prefix = symbol_prefix.lower()
+            results = [c for c in results if c.symbol.lower().startswith(prefix)]
+
+        if sector:
+            sector_lower = sector.lower()
+            results = [
+                c
+                for c in results
+                if c.sector and c.sector.lower() == sector_lower
+            ]
+
+        if active_only:
+            results = [c for c in results if c.is_active]
+
+        return results
+
     async def search_contracts_api(
         self, query: str, live: bool = False
     ) -> List[Contract]:
