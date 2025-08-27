@@ -167,21 +167,16 @@ class PersistenceService:
     async def _init_database(self):
         """Initialize database connection and configure for optimal performance."""
         try:
-            # Open database with WAL mode for better concurrency
-            self._conn = sqlite3.connect(
+            # Open database with WAL mode for better concurrency off the event loop
+            self._conn = await asyncio.to_thread(
+                sqlite3.connect,
                 self.database_path,
                 check_same_thread=False,  # Allow access from different threads
                 timeout=30.0,  # 30 second timeout for busy database
             )
 
-            # Configure SQLite for optimal performance
-            self._conn.execute("PRAGMA journal_mode=WAL")
-            self._conn.execute(
-                "PRAGMA synchronous=NORMAL"
-            )  # Faster than FULL, still safe
-            self._conn.execute("PRAGMA cache_size=10000")  # 10MB cache
-            self._conn.execute("PRAGMA temp_store=memory")
-            self._conn.execute("PRAGMA mmap_size=268435456")  # 256MB memory map
+            # Configure SQLite for optimal performance in a background thread
+            await asyncio.to_thread(self._configure_connection)
 
             # Create tables if they don't exist
             await self._create_tables()
@@ -195,54 +190,73 @@ class PersistenceService:
     async def _create_tables(self):
         """Create database tables with appropriate constraints."""
         try:
-            # Bars table with scaled integer prices and PRIMARY KEY constraint
-            self._conn.execute("""
-                CREATE TABLE IF NOT EXISTS bars (
-                    symbol TEXT NOT NULL,
-                    timeframe TEXT NOT NULL,
-                    timestamp_ms INTEGER NOT NULL,
-                    open_scaled INTEGER NOT NULL,
-                    high_scaled INTEGER NOT NULL,
-                    low_scaled INTEGER NOT NULL,
-                    close_scaled INTEGER NOT NULL,
-                    volume INTEGER NOT NULL,
-                    source TEXT NOT NULL,
-                    revision INTEGER NOT NULL DEFAULT 1,
-                    created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now') * 1000),
-                    PRIMARY KEY (symbol, timeframe, timestamp_ms)
-                ) WITHOUT ROWID
-            """)
-
-            # Ticks table
-            self._conn.execute("""
-                CREATE TABLE IF NOT EXISTS ticks (
-                    symbol TEXT NOT NULL,
-                    timestamp_ms INTEGER NOT NULL,
-                    price_scaled INTEGER NOT NULL,
-                    volume INTEGER NOT NULL,
-                    source TEXT NOT NULL,
-                    created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now') * 1000),
-                    PRIMARY KEY (symbol, timestamp_ms)
-                ) WITHOUT ROWID
-            """)
-
-            # Create indexes for better query performance
-            self._conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_bars_symbol_timeframe 
-                ON bars (symbol, timeframe, timestamp_ms DESC)
-            """)
-
-            self._conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_ticks_symbol_time 
-                ON ticks (symbol, timestamp_ms DESC)
-            """)
-
-            self._conn.commit()
+            await asyncio.to_thread(self._create_tables_sync)
             self.logger.info("Database tables created/verified")
-
         except Exception as e:
             self.logger.error(f"Failed to create tables: {e}")
             raise
+
+    def _configure_connection(self) -> None:
+        """Configure SQLite PRAGMA settings for optimal performance."""
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("PRAGMA synchronous=NORMAL")  # Faster than FULL, still safe
+        self._conn.execute("PRAGMA cache_size=10000")  # 10MB cache
+        self._conn.execute("PRAGMA temp_store=memory")
+        self._conn.execute("PRAGMA mmap_size=268435456")  # 256MB memory map
+
+    def _create_tables_sync(self) -> None:
+        """Synchronous helper to create tables and indexes."""
+        # Bars table with scaled integer prices and PRIMARY KEY constraint
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS bars (
+                symbol TEXT NOT NULL,
+                timeframe TEXT NOT NULL,
+                timestamp_ms INTEGER NOT NULL,
+                open_scaled INTEGER NOT NULL,
+                high_scaled INTEGER NOT NULL,
+                low_scaled INTEGER NOT NULL,
+                close_scaled INTEGER NOT NULL,
+                volume INTEGER NOT NULL,
+                source TEXT NOT NULL,
+                revision INTEGER NOT NULL DEFAULT 1,
+                created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now') * 1000),
+                PRIMARY KEY (symbol, timeframe, timestamp_ms)
+            ) WITHOUT ROWID
+            """
+        )
+
+        # Ticks table
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS ticks (
+                symbol TEXT NOT NULL,
+                timestamp_ms INTEGER NOT NULL,
+                price_scaled INTEGER NOT NULL,
+                volume INTEGER NOT NULL,
+                source TEXT NOT NULL,
+                created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now') * 1000),
+                PRIMARY KEY (symbol, timestamp_ms)
+            ) WITHOUT ROWID
+            """
+        )
+
+        # Create indexes for better query performance
+        self._conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_bars_symbol_timeframe
+            ON bars (symbol, timeframe, timestamp_ms DESC)
+            """
+        )
+
+        self._conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_ticks_symbol_time
+            ON ticks (symbol, timestamp_ms DESC)
+            """
+        )
+
+        self._conn.commit()
 
     async def _process_events(self):
         """Main event processing loop."""
@@ -487,7 +501,7 @@ class PersistenceService:
         # Test database connectivity
         if self._conn:
             try:
-                self._conn.execute("SELECT 1")
+                await asyncio.to_thread(self._conn.execute, "SELECT 1")
                 health_status["database_test"] = "passed"
             except Exception as e:
                 health_status["database_test"] = f"failed: {e}"
