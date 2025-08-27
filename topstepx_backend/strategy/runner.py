@@ -1,9 +1,19 @@
 """Strategy runner for managing multiple strategy instances."""
 
 import asyncio
+import importlib.util
 import logging
-from typing import Dict, List, Optional, Any, Tuple, Set, TYPE_CHECKING
+import sys
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
+
+try:  # pragma: no cover - optional dependency
+    from watchdog.events import FileSystemEventHandler
+    from watchdog.observers import Observer
+except Exception:  # pragma: no cover - watchdog may not be installed
+    FileSystemEventHandler = object  # type: ignore
+    Observer = None
 
 from topstepx_backend.core.event_bus import EventBus, Subscription
 from topstepx_backend.core.topics import (
@@ -33,6 +43,85 @@ class StrategyInstance:
     config: Dict[str, Any]
     subscriptions: List[Subscription]
     running: bool = False
+
+
+class _StrategyPluginHandler(FileSystemEventHandler):
+    """Watchdog event handler that publishes strategy add/remove events."""
+
+    def __init__(self, registry: StrategyRegistry, event_bus: EventBus, loop: asyncio.AbstractEventLoop):
+        self.registry = registry
+        self.event_bus = event_bus
+        self.loop = loop
+        self.logger = logging.getLogger(__name__)
+        # Map file path -> strategy_id to handle removals
+        self._file_map: Dict[str, str] = {}
+
+    # Helper to load config from plugin module
+    def _load_config(self, path: Path) -> Optional[Dict[str, Any]]:
+        try:
+            module_name = f"strategies.{path.stem}"
+            spec = importlib.util.spec_from_file_location(module_name, path)
+            if not spec or not spec.loader:  # pragma: no cover
+                return None
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[module_name] = module
+            spec.loader.exec_module(module)  # type: ignore[attr-defined]
+
+            # Register any new classes discovered in this module
+            self.registry.discover_strategy_classes()
+
+            config = getattr(module, "STRATEGY_CONFIG", None) or getattr(
+                module, "CONFIG", None
+            )
+            if isinstance(config, dict):
+                config = dict(config)
+                if "class" not in config:
+                    # Attempt to derive class path
+                    for attr_name in dir(module):
+                        attr = getattr(module, attr_name)
+                        if (
+                            isinstance(attr, type)
+                            and issubclass(attr, Strategy)
+                            and attr is not Strategy
+                        ):
+                            config["class"] = f"{module_name}.{attr_name}"
+                            break
+                return config
+        except Exception as e:  # pragma: no cover - plugin errors
+            self.logger.error(f"Failed to load strategy plugin {path}: {e}")
+        return None
+
+    def on_created(self, event):  # type: ignore[override]
+        if getattr(event, "is_directory", False):
+            return
+        if not str(event.src_path).endswith(".py"):
+            return
+        config = self._load_config(Path(event.src_path))
+        if not config:
+            return
+        strategy_id = config.get("strategy_id")
+        if not strategy_id:
+            return
+        self._file_map[event.src_path] = strategy_id
+        asyncio.run_coroutine_threadsafe(
+            self.event_bus.publish(strategy_add(), config), self.loop
+        )
+
+    # Treat modification as reload
+    on_modified = on_created  # type: ignore
+
+    def on_deleted(self, event):  # type: ignore[override]
+        if getattr(event, "is_directory", False):
+            return
+        if not str(event.src_path).endswith(".py"):
+            return
+        strategy_id = self._file_map.pop(event.src_path, None)
+        if not strategy_id:
+            return
+        asyncio.run_coroutine_threadsafe(
+            self.event_bus.publish(strategy_remove(), {"strategy_id": strategy_id}),
+            self.loop,
+        )
 
 
 class StrategyRunner:
@@ -74,6 +163,9 @@ class StrategyRunner:
         # Event processing tasks
         self._consumer_tasks: List[asyncio.Task] = []
         self._mgmt_subscriptions: List[Subscription] = []
+        # Filesystem plugin watcher
+        self._plugin_observer: Optional[Observer] = None
+        self._plugin_handler: Optional[_StrategyPluginHandler] = None
 
     async def start(self) -> None:
         """Start the strategy runner and all configured strategies."""
@@ -95,6 +187,9 @@ class StrategyRunner:
 
             # Subscribe to management events
             await self._setup_management_subscriptions()
+
+            # Start filesystem watcher for strategy plugins
+            await self._start_plugin_watcher()
 
             self._running = True
             self.logger.info(
@@ -130,7 +225,37 @@ class StrategyRunner:
             await self.event_bus.unsubscribe(sub)
         self._mgmt_subscriptions.clear()
 
+        # Stop filesystem watcher
+        await self._stop_plugin_watcher()
+
         self.logger.info("StrategyRunner stopped")
+
+    async def _start_plugin_watcher(self) -> None:
+        """Start watchdog observer for the strategies plugin directory."""
+        if Observer is None:
+            self.logger.warning("watchdog not installed - plugin directory will not be monitored")
+            return
+
+        plugin_dir = self.registry.plugin_path
+        if not plugin_dir.exists():
+            return
+
+        loop = asyncio.get_running_loop()
+        handler = _StrategyPluginHandler(self.registry, self.event_bus, loop)
+        observer = Observer()
+        observer.schedule(handler, str(plugin_dir), recursive=False)
+        observer.start()
+
+        self._plugin_observer = observer
+        self._plugin_handler = handler
+
+    async def _stop_plugin_watcher(self) -> None:
+        """Stop the plugin directory observer if running."""
+        if self._plugin_observer:
+            self._plugin_observer.stop()
+            self._plugin_observer.join()
+            self._plugin_observer = None
+            self._plugin_handler = None
 
     async def _load_and_create_strategies(self) -> None:
         """Load configurations and create strategy instances."""
