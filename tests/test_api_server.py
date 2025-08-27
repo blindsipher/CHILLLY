@@ -2,7 +2,7 @@ import asyncio
 
 from fastapi.testclient import TestClient
 
-from topstepx_backend.api.server import APIServer
+from topstepx_backend.api.server import APIServer, StatusResponse, StrategyResponse
 from topstepx_backend.core.event_bus import EventBus
 
 
@@ -42,7 +42,8 @@ def test_rest_endpoints():
     # system status
     resp = client.get("/status")
     assert resp.status_code == 200
-    assert resp.json()["status"] == "ok"
+    data = StatusResponse(**resp.json())
+    assert data.status == "ok"
     assert orch.status_called
 
     # order submission
@@ -56,15 +57,21 @@ def test_rest_endpoints():
     }
     resp = client.post("/orders", json=order)
     assert resp.status_code == 200
+    data = StatusResponse(**resp.json())
+    assert data.status == "submitted"
     assert orch.submit_payload == order
 
     # strategy add/remove
     resp = client.post("/strategies", json={"name": "test"})
     assert resp.status_code == 200
+    data = StrategyResponse(**resp.json())
+    assert data.status == "added"
     assert orch.add_payload == {"name": "test"}
 
     resp = client.delete("/strategies/abc")
     assert resp.status_code == 200
+    data = StrategyResponse(**resp.json())
+    assert data.status == "removed"
     assert orch.remove_id == "abc"
 
 
