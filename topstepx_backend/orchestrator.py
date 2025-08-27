@@ -18,7 +18,11 @@ from topstepx_backend.networking.user_hub_agent import UserHubAgent
 from topstepx_backend.networking.rate_limiter import RateLimiter
 from topstepx_backend.core.event_bus import EventBus
 from topstepx_backend.core.service import Service
-from topstepx_backend.core.topics import strategy_add, strategy_remove
+from topstepx_backend.core.topics import (
+    strategy_add,
+    strategy_remove,
+    order_request_submit,
+)
 from topstepx_backend.core.clock import SystemClock
 from topstepx_backend.services.persistence import PersistenceService
 from topstepx_backend.services.order_service import OrderService
@@ -28,6 +32,7 @@ from topstepx_backend.strategy.runner import StrategyRunner
 from topstepx_backend.strategy.registry import StrategyRegistry
 from topstepx_backend.networking.subscription_manager import SubscriptionManager
 from topstepx_backend.services.risk_manager import RiskManager
+from topstepx_backend.api.server import APIServer
 
 
 class SystemHealth:
@@ -124,6 +129,7 @@ class TopstepXOrchestrator:
         self.order_service: Optional[OrderService] = None
         self.risk_manager: Optional[RiskManager] = None
         self.strategy_runner: Optional[StrategyRunner] = None
+        self.api_server: Optional[APIServer] = None
 
         # System management
         self.health_monitor = SystemHealth()
@@ -207,6 +213,7 @@ class TopstepXOrchestrator:
                 risk_manager=self.risk_manager,
                 config=self.config,
             )
+            self.api_server = APIServer(self)
 
             # Services in startup order
             self._services = [
@@ -224,6 +231,7 @@ class TopstepXOrchestrator:
                 self.risk_manager,
                 self.order_service,
                 self.strategy_runner,
+                self.api_server,
             ]
 
             for service in self._services:
@@ -304,6 +312,12 @@ class TopstepXOrchestrator:
                 self.logger.error("Error stopping %s: %s", name, e)
 
         self.logger.info("TopstepX backend orchestrator shutdown complete")
+
+    async def submit_order(self, order: Dict[str, Any]) -> None:
+        """Publish an order submission request."""
+        if not self.event_bus:
+            return
+        await self.event_bus.publish(order_request_submit(), order)
 
     async def add_strategy(self, config: Dict[str, Any]) -> None:
         """Publish a request to add a strategy at runtime."""
