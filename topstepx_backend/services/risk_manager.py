@@ -3,9 +3,10 @@ import logging
 from dataclasses import dataclass
 from typing import Dict, Tuple, Any
 
-from topstepx_backend.core.event_bus import EventBus, Subscription
-from topstepx_backend.core.topics import order_fill_update, account_position_update
 from topstepx_backend.config.settings import TopstepConfig
+from topstepx_backend.core.event_bus import EventBus, Subscription
+from topstepx_backend.core.service import Service
+from topstepx_backend.core.topics import order_fill_update, account_position_update
 from topstepx_backend.data.types import OrderIntent, OrderSide
 
 
@@ -17,10 +18,11 @@ class PositionState:
     pnl: float = 0.0
 
 
-class RiskManager:
+class RiskManager(Service):
     """Manages trading risk limits and account state."""
 
     def __init__(self, event_bus: EventBus, config: TopstepConfig):
+        super().__init__()
         self.event_bus = event_bus
         self.config = config
         self.logger = logging.getLogger(__name__)
@@ -28,7 +30,6 @@ class RiskManager:
         self.account_pnl: Dict[int, float] = {}
         self._subscriptions: list[Subscription] = []
         self._tasks: list[asyncio.Task] = []
-        self._running = False
 
     async def start(self) -> None:
         """Subscribe to necessary topics."""
