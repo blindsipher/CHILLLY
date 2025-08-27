@@ -2,8 +2,15 @@ import os
 import re
 from typing import Optional, List
 from dataclasses import dataclass, field
-from dotenv import load_dotenv
 from urllib.parse import urlparse
+from dotenv import load_dotenv
+
+from .profiles import (
+    BaseProfile,
+    DevelopmentProfile,
+    ProductionProfile,
+    StagingProfile,
+)
 
 
 @dataclass
@@ -179,10 +186,24 @@ class TopstepConfig:
 config: Optional[TopstepConfig] = None
 
 
+PROFILE_MAP = {
+    "development": DevelopmentProfile,
+    "staging": StagingProfile,
+    "production": ProductionProfile,
+}
+
+
+def _load_profile() -> BaseProfile:
+    env = os.getenv("ENVIRONMENT", "development").lower()
+    profile_cls = PROFILE_MAP.get(env, DevelopmentProfile)
+    return profile_cls()
+
+
 def get_config() -> TopstepConfig:
     """Get the global configuration instance."""
     global config
     if config is None:
-        config = TopstepConfig.from_env()
+        profile = _load_profile()
+        config = TopstepConfig(**profile.dict())
         config.validate()
     return config
