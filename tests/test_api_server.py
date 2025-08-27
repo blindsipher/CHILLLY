@@ -1,5 +1,6 @@
 import asyncio
 
+import pytest
 from fastapi.testclient import TestClient
 
 from topstepx_backend.api.server import APIServer
@@ -75,10 +76,20 @@ def test_websocket_gateway():
     loop.run_until_complete(server.ws_gateway.start())
 
     client = TestClient(server.app)
-    with client.websocket_connect("/ws/token") as ws:
-        loop.run_until_complete(orch.event_bus.publish("topic", {"foo": 1}))
-        msg = ws.receive_json()
-        assert msg["topic"] == "topic"
-        assert msg["payload"] == {"foo": 1}
+    with client.websocket_connect("/ws/token?patterns=topic1") as ws1, \
+        client.websocket_connect("/ws/token/topic2") as ws2:
+        loop.run_until_complete(orch.event_bus.publish("topic1", {"foo": 1}))
+        msg1 = ws1.receive_json()
+        assert msg1["topic"] == "topic1"
+        assert msg1["payload"] == {"foo": 1}
+
+        # ws2 should not receive topic1
+        with pytest.raises(TimeoutError):
+            ws2.receive_json(timeout=0.1)
+
+        loop.run_until_complete(orch.event_bus.publish("topic2", {"bar": 2}))
+        msg2 = ws2.receive_json()
+        assert msg2["topic"] == "topic2"
+        assert msg2["payload"] == {"bar": 2}
 
     loop.run_until_complete(server.ws_gateway.stop())

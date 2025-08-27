@@ -3,7 +3,7 @@ import contextlib
 import json
 import logging
 from dataclasses import asdict, is_dataclass
-from typing import Any, Iterable, Optional, Set
+from typing import Any, Dict, Iterable, Optional, Set
 
 from topstepx_backend.auth.auth_manager import AuthManager, AuthenticationError
 from topstepx_backend.core.event_bus import EventBus, Subscription
@@ -23,61 +23,50 @@ class WebSocketGateway:
     :class:`AuthManager`.
     """
 
-    def __init__(
-        self,
-        event_bus: EventBus,
-        auth_manager: AuthManager,
-        patterns: Optional[Iterable[str]] = None,
-    ) -> None:
+    def __init__(self, event_bus: EventBus, auth_manager: AuthManager) -> None:
         self.event_bus = event_bus
         self.auth_manager = auth_manager
-        self.patterns = list(patterns) if patterns else ["*"]
         self.logger = logging.getLogger(__name__)
 
-        self._subscription: Optional[Subscription] = None
-        self._forwarder_task: Optional[asyncio.Task] = None
-        self._clients: Set[Any] = set()
+        # Mapping of pattern -> subscription/task/client set
+        self._subscriptions: Dict[str, Subscription] = {}
+        self._forwarder_tasks: Dict[str, asyncio.Task] = {}
+        self._pattern_clients: Dict[str, Set[Any]] = {}
+        self._client_patterns: Dict[Any, Set[str]] = {}
 
     async def start(self) -> None:
-        """Subscribe to the event bus and start forwarding events."""
-        if self._subscription is not None:
-            return
-
-        # Subscribe using the first pattern.  When multiple patterns are
-        # requested we create a single wildcard subscription (``*``) which is
-        # sufficient for test scenarios and keeps implementation simple.
-        pattern = self.patterns[0] if len(self.patterns) == 1 else "*"
-        self._subscription = await self.event_bus.subscribe(pattern)
-        self._forwarder_task = asyncio.create_task(self._forward_events())
-        self.logger.info("WSGateway subscribed to '%s'", pattern)
+        """Placeholder to align with Service interface."""
+        # Subscriptions are created on-demand when clients connect.
+        return
 
     async def stop(self) -> None:
         """Stop forwarding events and unsubscribe from the bus."""
-        if self._forwarder_task:
-            self._forwarder_task.cancel()
+        # Cancel all forwarder tasks and unsubscribe
+        for pattern, task in list(self._forwarder_tasks.items()):
+            task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
-                await self._forwarder_task
-            self._forwarder_task = None
-
-        if self._subscription:
-            await self.event_bus.unsubscribe(self._subscription)
-            self._subscription = None
+                await task
+            self._forwarder_tasks.pop(pattern, None)
+        for pattern, sub in list(self._subscriptions.items()):
+            await self.event_bus.unsubscribe(sub)
+            self._subscriptions.pop(pattern, None)
 
         # Close all connected clients
-        for ws in list(self._clients):
+        for ws in list(self._client_patterns.keys()):
             try:
                 await ws.close()  # type: ignore[attr-defined]
             except Exception:
                 pass
-            self._clients.discard(ws)
+            self._client_patterns.pop(ws, None)
 
-    async def connect(self, websocket: Any, token: str) -> None:
+    async def connect(self, websocket: Any, token: str, patterns: Iterable[str]) -> None:
         """Register a WebSocket client after validating the token.
 
         Args:
             websocket: Object representing the WebSocket connection.  Must have
                 an asynchronous ``send`` method and optionally ``close``.
             token: Authentication token provided by client.
+            patterns: Iterable of topic patterns the client is interested in.
 
         Raises:
             AuthenticationError: If the token does not match AuthManager's token.
@@ -87,29 +76,63 @@ class WebSocketGateway:
             self.logger.warning("WebSocket authentication failed")
             raise AuthenticationError("Invalid authentication token")
 
-        self._clients.add(websocket)
-        self.logger.debug("Client connected; total clients=%d", len(self._clients))
+        pattern_set = set(patterns) or {"*"}
+        self._client_patterns[websocket] = pattern_set
+        for pattern in pattern_set:
+            if pattern not in self._subscriptions:
+                sub = await self.event_bus.subscribe(pattern)
+                self._subscriptions[pattern] = sub
+                self._pattern_clients[pattern] = set()
+                self._forwarder_tasks[pattern] = asyncio.create_task(
+                    self._forward_events(pattern)
+                )
+                self.logger.info("WSGateway subscribed to '%s'", pattern)
+            self._pattern_clients[pattern].add(websocket)
+
+        self.logger.debug(
+            "Client connected with patterns=%s; total clients=%d",
+            pattern_set,
+            len(self._client_patterns),
+        )
 
     async def disconnect(self, websocket: Any) -> None:
         """Remove a WebSocket client."""
-        self._clients.discard(websocket)
+        patterns = self._client_patterns.pop(websocket, set())
+        for pattern in patterns:
+            clients = self._pattern_clients.get(pattern)
+            if clients is not None:
+                clients.discard(websocket)
+                if not clients:
+                    self._pattern_clients.pop(pattern, None)
+                    task = self._forwarder_tasks.pop(pattern, None)
+                    if task:
+                        task.cancel()
+                        if task is not asyncio.current_task():
+                            with contextlib.suppress(asyncio.CancelledError):
+                                await task
+                    sub = self._subscriptions.pop(pattern, None)
+                    if sub:
+                        await self.event_bus.unsubscribe(sub)
         try:
             await websocket.close()  # type: ignore[attr-defined]
         except Exception:
             pass
-        self.logger.debug("Client disconnected; total clients=%d", len(self._clients))
+        self.logger.debug(
+            "Client disconnected; total clients=%d", len(self._client_patterns)
+        )
 
-    async def _forward_events(self) -> None:
-        """Internal task that forwards bus events to clients."""
-        assert self._subscription is not None
-        async for topic, payload in self._subscription:  # type: ignore[union-attr]
+    async def _forward_events(self, pattern: str) -> None:
+        """Forward events for a specific subscription pattern."""
+        subscription = self._subscriptions[pattern]
+        async for topic, payload in subscription:
             message = self._serialize(topic, payload)
-            await self._broadcast(message)
+            await self._broadcast(pattern, message)
 
-    async def _broadcast(self, message: str) -> None:
-        if not self._clients:
+    async def _broadcast(self, pattern: str, message: str) -> None:
+        clients = self._pattern_clients.get(pattern)
+        if not clients:
             return
-        coros = [self._safe_send(ws, message) for ws in list(self._clients)]
+        coros = [self._safe_send(ws, message) for ws in list(clients)]
         await asyncio.gather(*coros, return_exceptions=True)
 
     async def _safe_send(self, ws: Any, message: str) -> None:
@@ -118,9 +141,7 @@ class WebSocketGateway:
         except Exception:
             # Drop clients that fail to receive
             self.logger.debug("Removing failed client", exc_info=True)
-            self._clients.discard(ws)
-            with contextlib.suppress(Exception):
-                await ws.close()  # type: ignore[attr-defined]
+            await self.disconnect(ws)
 
     def _serialize(self, topic: str, payload: Any) -> str:
         """Serialize an event into JSON string."""
