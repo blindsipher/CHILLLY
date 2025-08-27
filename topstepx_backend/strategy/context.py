@@ -7,6 +7,7 @@ from typing import Dict, Any, Optional, TYPE_CHECKING
 from topstepx_backend.data.types import OrderIntent, OrderType, OrderSide, TimeInForce
 from topstepx_backend.core.topics import order_request_submit
 from topstepx_backend.networking.api_helpers import utc_now
+from topstepx_backend.services.risk_manager import RiskManager
 
 if TYPE_CHECKING:
     from topstepx_backend.core.event_bus import EventBus
@@ -38,6 +39,7 @@ class StrategyContext:
     contract_id: str
     timeframe: str
     risk_limits: RiskLimits
+    risk_manager: RiskManager
 
     # Runtime state
     _order_count: int = 0
@@ -54,7 +56,12 @@ class StrategyContext:
             True if order was submitted successfully, False otherwise
         """
         try:
-            # Risk checks
+            # Global risk manager checks
+            if self.risk_manager and not self.risk_manager.check_order(intent):
+                self.logger.warning(f"Order blocked by risk manager: {intent}")
+                return False
+
+            # Strategy-specific risk checks
             if not self._check_risk_limits(intent):
                 self.logger.warning(f"Order blocked by risk limits: {intent}")
                 return False

@@ -27,6 +27,11 @@ class TopstepConfig:
     event_backend: str = "memory"  # memory|redis
     redis_url: str = "redis://localhost:6379/0"
     use_uvloop: bool = False
+    # Global risk thresholds
+    risk_max_position_size: int = 5
+    risk_max_daily_loss: float = 1000.0
+    risk_max_order_size: int = 5
+    risk_max_orders_per_minute: int = 10
 
     @classmethod
     def from_env(cls, env_file: Optional[str] = None) -> "TopstepConfig":
@@ -63,6 +68,16 @@ class TopstepConfig:
             event_backend=os.getenv("EVENT_BACKEND", "memory"),
             redis_url=os.getenv("REDIS_URL", "redis://localhost:6379/0"),
             use_uvloop=os.getenv("USE_UVLOOP", "false").lower() == "true",
+            risk_max_position_size=int(
+                os.getenv("RISK_MAX_POSITION_SIZE", "5")
+            ),
+            risk_max_daily_loss=float(
+                os.getenv("RISK_MAX_DAILY_LOSS", "1000")
+            ),
+            risk_max_order_size=int(os.getenv("RISK_MAX_ORDER_SIZE", "5")),
+            risk_max_orders_per_minute=int(
+                os.getenv("RISK_MAX_ORDERS_PER_MINUTE", "10")
+            ),
         )
 
     def validate(self) -> bool:
