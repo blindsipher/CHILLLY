@@ -1,0 +1,39 @@
+# Strategy configuration file for TopstepX
+# Each strategy defines its class, parameters, and trading configuration
+
+strategies:
+  # RSI + EMA Crossover Strategy for ES 1-minute
+  - strategy_id: "rsi_ema_ES_1m"
+    class: "topstepx_backend.strategy.examples.rsi_ema.RSIEMAStrategy"
+    account_id: 123456  # Replace with your actual account ID
+    contract_id: "ESU5"  # Replace with current ES contract
+    timeframe: "1m"
+    params:
+      rsi_period: 14
+      rsi_overbought: 70
+      rsi_oversold: 30
+      ema_period: 50
+      position_size: 1
+    risk:
+      max_position_size: 3
+      max_daily_loss: 500.0
+      max_order_size: 2
+      max_orders_per_minute: 5
+
+  # Donchian Breakout Strategy for RTY 5-minute  
+  - strategy_id: "donchian_RTY_5m"
+    class: "topstepx_backend.strategy.examples.donchian_breakout.DonchianStrategy"
+    account_id: 123456  # Replace with your actual account ID
+    contract_id: "RTYU5"  # Replace with current RTY contract
+    timeframe: "5m"
+    params:
+      high_period: 20
+      low_period: 20
+      position_size: 1
+      stop_loss_ticks: 10
+      profit_target_ticks: 20
+    risk:
+      max_position_size: 2
+      max_daily_loss: 750.0
+      max_order_size: 1
+      max_orders_per_minute: 3

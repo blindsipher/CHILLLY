@@ -1,0 +1,167 @@
+import os
+import re
+from typing import Optional
+from dataclasses import dataclass
+from dotenv import load_dotenv
+from urllib.parse import urlparse
+
+
+@dataclass
+class TopstepConfig:
+    """Configuration for TopstepX API and backend settings."""
+
+    username: str
+    api_key: str
+    account_id: int
+    account_name: str
+    # ProjectX Gateway API (Primary)
+    projectx_base_url: str
+    projectx_user_hub_url: str
+    projectx_market_hub_url: str
+    # Note: UserAPI is not used in this system - ProjectX Gateway API is used for all trading operations
+    # Legacy fields for backward compatibility
+    base_url: str
+    user_hub_url: str
+    market_hub_url: str
+    database_path: str
+    log_level: str
+    environment: str
+    live_mode: bool = True  # Live mode by default
+
+    @classmethod
+    def from_env(cls, env_file: Optional[str] = None) -> "TopstepConfig":
+        """Load configuration from environment variables."""
+        if env_file:
+            load_dotenv(env_file)
+        else:
+            load_dotenv()
+
+        return cls(
+            username=os.getenv("TOPSTEP_USERNAME", ""),
+            api_key=os.getenv("TOPSTEP_API_KEY", ""),
+            account_id=int(os.getenv("TOPSTEP_ACCOUNT_ID", "0")),
+            account_name=os.getenv("TOPSTEP_ACCOUNT_NAME", ""),
+            # ProjectX Gateway API (Primary) - Production URLs, Simulated Trading
+            projectx_base_url=os.getenv(
+                "PROJECTX_BASE_URL", "https://api.topstepx.com"
+            ),
+            projectx_user_hub_url=os.getenv(
+                "PROJECTX_USER_HUB_URL", "https://rtc.topstepx.com/hubs/user"
+            ),
+            projectx_market_hub_url=os.getenv(
+                "PROJECTX_MARKET_HUB_URL", "https://rtc.topstepx.com/hubs/market"
+            ),
+            # Note: UserAPI is not used - ProjectX Gateway API handles all operations
+            # Legacy fields for backward compatibility
+            base_url=os.getenv(
+                "TOPSTEP_BASE_URL", "https://api.topstepx.com"
+            ),  # Default to ProjectX
+            user_hub_url=os.getenv(
+                "TOPSTEP_USER_HUB_URL", "https://rtc.topstepx.com/hubs/user"
+            ),
+            market_hub_url=os.getenv(
+                "TOPSTEP_MARKET_HUB_URL", "https://rtc.topstepx.com/hubs/market"
+            ),
+            database_path=os.getenv("DATABASE_PATH", "data/topstepx.db"),
+            log_level=os.getenv("LOG_LEVEL", "INFO"),
+            environment=os.getenv("ENVIRONMENT", "development"),
+            live_mode=os.getenv("LIVE_MODE", "true").lower() == "true",
+        )
+
+    def validate(self) -> bool:
+        """Validate that required configuration values are present and secure."""
+        required_fields = [
+            "username",
+            "api_key",
+            "projectx_base_url",
+            "projectx_user_hub_url",
+            "projectx_market_hub_url",
+        ]
+        for field in required_fields:
+            value = getattr(self, field)
+            if not value or (isinstance(value, str) and not value.strip()):
+                raise ValueError(
+                    f"Required configuration field '{field}' is missing or empty"
+                )
+
+        # Validate account_id
+        if self.account_id <= 0:
+            raise ValueError("Invalid account_id: must be positive integer")
+
+        # Validate API key format (should be alphanumeric with potential special chars including base64)
+        if not re.match(r"^[A-Za-z0-9_\-\.=+/]+$", self.api_key):
+            raise ValueError("Invalid api_key format: contains invalid characters")
+
+        if len(self.api_key) < 16:
+            raise ValueError("Invalid api_key: too short (minimum 16 characters)")
+
+        # Validate URLs
+        url_fields = [
+            "projectx_base_url",
+            "projectx_user_hub_url",
+            "projectx_market_hub_url",
+        ]
+        for field in url_fields:
+            url = getattr(self, field)
+            if not self._validate_url(url):
+                raise ValueError(f"Invalid URL format for {field}: {url}")
+
+        # Validate database path
+        if not self.database_path:
+            raise ValueError("Database path cannot be empty")
+
+        # Validate log level
+        valid_log_levels = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+        if self.log_level.upper() not in valid_log_levels:
+            raise ValueError(
+                f"Invalid log_level: {self.log_level}. Must be one of {valid_log_levels}"
+            )
+
+        # Validate environment
+        valid_environments = ["development", "staging", "production"]
+        if self.environment not in valid_environments:
+            raise ValueError(
+                f"Invalid environment: {self.environment}. Must be one of {valid_environments}"
+            )
+
+        return True
+
+    def _validate_url(self, url: str) -> bool:
+        """Validate URL format and security."""
+        try:
+            parsed = urlparse(url)
+
+            # Must have scheme and netloc
+            if not parsed.scheme or not parsed.netloc:
+                return False
+
+            # Must be HTTPS in production
+            if self.environment == "production" and parsed.scheme != "https":
+                raise ValueError(f"Production environment requires HTTPS URLs: {url}")
+
+            # Must be HTTP/HTTPS
+            if parsed.scheme not in ["http", "https"]:
+                return False
+
+            # Basic hostname validation
+            hostname = parsed.netloc.split(":")[0]  # Remove port if present
+            if not re.match(r"^[a-zA-Z0-9\-\.]+$", hostname):
+                return False
+
+            return True
+
+        except Exception:
+            return False
+
+
+# Global config instance
+config: Optional[TopstepConfig] = None
+
+
+def get_config() -> TopstepConfig:
+    """Get the global configuration instance."""
+    global config
+    if config is None:
+        config = TopstepConfig.from_env()
+        config.validate()
+    return config
