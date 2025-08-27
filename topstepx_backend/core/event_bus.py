@@ -5,6 +5,7 @@ import fnmatch
 import time
 import itertools
 import logging
+import re
 from contextlib import suppress
 from typing import Any, Dict, List, Optional
 from dataclasses import dataclass
@@ -27,13 +28,14 @@ class Event:
 class Subscription:
     """Individual subscription with pattern matching and backpressure handling."""
 
-    __slots__ = ("queue", "pattern", "critical", "_closed")
+    __slots__ = ("queue", "pattern", "critical", "_closed", "regex")
 
     def __init__(self, pattern: str, maxsize: int, critical: bool):
         self.pattern = pattern
         self.critical = critical
         self.queue = asyncio.Queue(maxsize=maxsize)
         self._closed = False
+        self.regex = None
 
     def __aiter__(self):
         return self
@@ -82,8 +84,11 @@ class EventBus:
             "backpressure_blocks": 0,
             "subscriber_count": 0,
             "avg_fanout_time_ms": 0.0,
+            "avg_fanout_time_ms_fnmatch": 0.0,
             "avg_worker_lag_ms": 0.0,
             "max_queue_depth": 0,
+            "avg_regex_compile_time_ms": 0.0,
+            "regex_compilations": 0,
         }
         self._metrics_lock = asyncio.Lock()
 
@@ -103,10 +108,20 @@ class EventBus:
         """
         sub = Subscription(pattern, maxsize or self._default_maxsize, critical)
 
+        start = time.perf_counter()
+        sub.regex = re.compile(fnmatch.translate(pattern))
+        compile_time_ms = (time.perf_counter() - start) * 1000
+
         async with self._lock:
             self._subs.append(sub)
             async with self._metrics_lock:
                 self._metrics["subscriber_count"] = len(self._subs)
+                count = self._metrics["regex_compilations"] + 1
+                current_avg = self._metrics["avg_regex_compile_time_ms"]
+                self._metrics["avg_regex_compile_time_ms"] = (
+                    current_avg * (count - 1) + compile_time_ms
+                ) / count
+                self._metrics["regex_compilations"] = count
 
         self.logger.info(
             f"New subscription: pattern='{pattern}' critical={critical} maxsize={sub.queue.maxsize}"
@@ -172,29 +187,40 @@ class EventBus:
 
     async def _fanout(self, topic: str):
         """Fan out events for a specific topic to all matching subscribers."""
-        start_time = time.time()
+        start_time = time.perf_counter()
 
         try:
             q = self._topic_fifo[topic]
             events_processed = 0
             total_lag_ms = 0.0
+            match_time_regex = 0.0
+            match_time_fnmatch = 0.0
+
+            async with self._lock:
+                current_subs = list(self._subs)
 
             while not q.empty():
                 evt = await q.get()
                 events_processed += 1
                 total_lag_ms += (time.time() - evt.ts) * 1000
 
-                # Snapshot subscribers to avoid iteration issues during unsubscribe
-                async with self._lock:
-                    current_subs = list(self._subs)
+                match_start = time.perf_counter()
+                matched = [sub for sub in current_subs if sub.regex.match(evt.topic)]
+                match_time_regex += time.perf_counter() - match_start
 
-                # Deliver to all matching subscribers
+                for sub in matched:
+                    await self._deliver(sub, evt)
+
+                fnmatch_start = time.perf_counter()
                 for sub in current_subs:
-                    if fnmatch.fnmatch(evt.topic, sub.pattern):
-                        await self._deliver(sub, evt)
+                    fnmatch.fnmatch(evt.topic, sub.pattern)
+                match_time_fnmatch += time.perf_counter() - fnmatch_start
 
-            # Update metrics
-            fanout_time_ms = (time.time() - start_time) * 1000
+            fanout_total = time.perf_counter() - start_time
+            fanout_time_ms = fanout_total * 1000
+            deliver_time = fanout_total - match_time_regex
+            fanout_time_fnmatch_ms = (deliver_time + match_time_fnmatch) * 1000
+
             async with self._metrics_lock:
                 self._metrics["events_processed"] += events_processed
                 # Running average
@@ -202,6 +228,11 @@ class EventBus:
                 current_avg = self._metrics["avg_fanout_time_ms"]
                 self._metrics["avg_fanout_time_ms"] = (
                     current_avg * (count - events_processed) + fanout_time_ms
+                ) / count
+                current_avg_fnmatch = self._metrics["avg_fanout_time_ms_fnmatch"]
+                self._metrics["avg_fanout_time_ms_fnmatch"] = (
+                    current_avg_fnmatch * (count - events_processed)
+                    + fanout_time_fnmatch_ms
                 ) / count
                 current_lag = self._metrics["avg_worker_lag_ms"]
                 self._metrics["avg_worker_lag_ms"] = (
