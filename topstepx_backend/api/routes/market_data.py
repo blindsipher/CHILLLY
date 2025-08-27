@@ -6,17 +6,26 @@ from fastapi import APIRouter, Request
 router = APIRouter()
 
 
-def _call(orchestrator: Any, name: str, *args, default: Any = None) -> Any:
+def _call(
+    orchestrator: Any, name: str, *args, default: Any = None, **kwargs
+) -> Any:
     func = getattr(orchestrator, name, None)
     if func is None:
         return default
-    return func(*args)
+    return func(*args, **kwargs)
 
 
 @router.get("/contracts")
-async def get_contracts(request: Request) -> List[Any]:
+async def get_contracts(
+    request: Request, symbol: str | None = None, sector: str | None = None
+) -> List[Any]:
     orchestrator = request.app.state.orchestrator
-    result = _call(orchestrator, "get_contracts", default=[])
+    kwargs = {}
+    if symbol is not None:
+        kwargs["symbol"] = symbol
+    if sector is not None:
+        kwargs["sector"] = sector
+    result = _call(orchestrator, "get_contracts", default=[], **kwargs)
     if inspect.isawaitable(result):
         result = await result
     return result

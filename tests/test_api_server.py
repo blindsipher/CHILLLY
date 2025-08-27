@@ -48,6 +48,8 @@ class DummyOrchestrator:
         self.health_called = False
         self.logs_called = False
         self.config_called = False
+        self.symbol_filter = None
+        self.sector_filter = None
 
     def get_system_status(self):
         self.status_called = True
@@ -63,8 +65,10 @@ class DummyOrchestrator:
         self.remove_id = sid
 
     # Market data
-    def get_contracts(self):
+    def get_contracts(self, symbol: str | None = None, sector: str | None = None):
         self.contracts_called = True
+        self.symbol_filter = symbol
+        self.sector_filter = sector
         return ["ES"]
 
     def get_market_data(self, contract):
@@ -183,6 +187,11 @@ def test_rest_endpoints():
     assert resp.status_code == 200
     assert resp.json() == ["ES"]
     assert orch.contracts_called
+
+    resp = client.get("/contracts?symbol=ES&sector=EP")
+    assert resp.status_code == 200
+    assert orch.symbol_filter == "ES"
+    assert orch.sector_filter == "EP"
 
     resp = client.get("/market-data/ES")
     assert resp.json()["contract"] == "ES"
