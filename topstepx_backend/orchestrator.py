@@ -124,6 +124,9 @@ class TopstepXOrchestrator:
         self.risk_manager: Optional[RiskManager] = None
         self.strategy_runner: Optional[StrategyRunner] = None
 
+        # API server
+        self.api_server: Optional["APIServer"] = None
+
         # System management
         self.health_monitor = SystemHealth()
         self._running = False
@@ -311,6 +314,13 @@ class TopstepXOrchestrator:
             # Start health monitoring
             self._health_check_task = asyncio.create_task(self._health_check_loop())
 
+            # Start API server
+            from topstepx_backend.api.server import APIServer
+
+            self.api_server = APIServer(self)
+            await self.api_server.start()
+            self.health_monitor.update_component_health("api_server", "healthy")
+
             self.logger.info("TopstepX backend orchestrator started successfully")
 
             # Wait for shutdown signal
@@ -337,6 +347,14 @@ class TopstepXOrchestrator:
                 await self._health_check_task
             except asyncio.CancelledError:
                 pass
+
+        # Stop API server
+        if self.api_server:
+            try:
+                await self.api_server.stop()
+                self.health_monitor.update_component_health("api_server", "stopped")
+            except Exception as e:
+                self.logger.error("Error stopping api_server: %s", e)
 
         # Shutdown services in reverse order
         shutdown_order = list(reversed(self._startup_order))
