@@ -221,13 +221,24 @@ class UserHubAgent(HubAgent):
                 from topstepx_backend.data.types import OrderStatus
                 from topstepx_backend.networking.api_helpers import utc_now
 
-                # Convert to typed event
+                # Map ProjectX numeric status codes to OrderStatus enum
+                status_map = {
+                    0: OrderStatus.PENDING,
+                    1: OrderStatus.WORKING,
+                    2: OrderStatus.FILLED,
+                    3: OrderStatus.CANCELED,
+                    4: OrderStatus.PARTIAL_FILL,
+                    5: OrderStatus.REJECTED,
+                    6: OrderStatus.EXPIRED,
+                }
+
+                status_enum = status_map.get(order.status)
+
+                # Convert to typed event using enum name
                 status_event = {
                     "order_id": order.id,
                     "custom_tag": order.custom_tag,
-                    "status": OrderStatus.WORKING.value
-                    if order.status == 1
-                    else "Unknown",
+                    "status": status_enum.name if status_enum else "UNKNOWN",
                     "timestamp": utc_now().isoformat(),
                 }
 
