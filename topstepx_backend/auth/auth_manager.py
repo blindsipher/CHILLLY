@@ -200,7 +200,11 @@ class AuthManager:
                 await asyncio.sleep(300)  # 5 minutes
 
     async def validate_token(self) -> bool:
-        """Validate current token with the API and refresh if needed."""
+        """Validate current token with the API and refresh if needed.
+
+        If the API responds with a non-200 status, the response body is logged and
+        ``False`` is returned.
+        """
         if not self._token:
             return False
 
@@ -209,6 +213,13 @@ class AuthManager:
             async with self._session.post(
                 f"{self.config.projectx_base_url}/api/Auth/validate", headers=headers
             ) as response:
+                if response.status != 200:
+                    body = await response.text()
+                    self.logger.error(
+                        f"Token validation failed: HTTP {response.status} - {body}"
+                    )
+                    return False
+
                 data = await response.json()
                 success = data.get("success", False)
 
