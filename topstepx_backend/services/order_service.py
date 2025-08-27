@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import json
 import aiohttp
 from typing import Dict, Any, Optional, List
 from datetime import datetime, timedelta
@@ -26,6 +27,7 @@ from topstepx_backend.core.topics import (
     order_ack,
     order_status_update,
     order_fill_update,
+    service_error,
 )
 
 
@@ -84,6 +86,7 @@ class OrderService:
             "orders_cancelled": 0,
             "orders_rejected": 0,
             "api_errors": 0,
+            "api_retries": 0,
             "duplicate_orders_prevented": 0,
             "last_activity": None,
         }
@@ -204,6 +207,53 @@ class OrderService:
         )
 
         self.logger.info("Order service subscriptions established")
+
+    async def _request_with_retry(
+        self,
+        method: str,
+        url: str,
+        *,
+        max_retries: int = 3,
+        backoff_base: float = 0.5,
+        **kwargs,
+    ) -> tuple[int, str]:
+        """Execute HTTP request with retries and exponential backoff."""
+        if not self._session:
+            raise RuntimeError("HTTP session not initialized")
+
+        for attempt in range(max_retries + 1):
+            try:
+                async with self._session.request(method, url, **kwargs) as response:
+                    text = await response.text()
+                    if response.status >= 500:
+                        raise RuntimeError(
+                            f"HTTP {response.status}: {text}")
+                    return response.status, text
+            except Exception as e:
+                if attempt == max_retries:
+                    self.logger.error(
+                        f"{method} {url} failed after {attempt + 1} attempts: {e}"
+                    )
+                    self._metrics["api_errors"] += 1
+                    error_event = {
+                        "url": url,
+                        "method": method,
+                        "error": str(e),
+                        "retries": attempt,
+                    }
+                    try:
+                        await self.event_bus.publish(
+                            service_error("order"), error_event
+                        )
+                    except Exception:
+                        self.logger.exception("Failed to publish error event")
+                    raise
+                wait = backoff_base * (2**attempt)
+                self.logger.warning(
+                    f"{method} {url} attempt {attempt + 1} failed: {e}. Retrying in {wait:.2f}s"
+                )
+                self._metrics["api_retries"] += 1
+                await asyncio.sleep(wait)
 
     async def _consume_submit_requests(self, subscription: Subscription) -> None:
         """Consumer for order submission requests."""
@@ -401,40 +451,39 @@ class OrderService:
             self.logger.debug(f"Sending cancel request to {url}: {cancel_payload}")
 
             # Make API call
-            async with self._session.post(
-                url, json=cancel_payload, headers=headers
-            ) as response:
-                response_text = await response.text()
+            status, response_text = await self._request_with_retry(
+                "POST", url, json=cancel_payload, headers=headers
+            )
 
-                if response.status in [200, 204]:
-                    self.logger.info(f"Order {order_id} cancelled successfully")
-                    self._metrics["orders_cancelled"] += 1
+            if status in [200, 204]:
+                self.logger.info(f"Order {order_id} cancelled successfully")
+                self._metrics["orders_cancelled"] += 1
 
-                    # Publish success ack
-                    await self._publish_cancel_ack(
-                        custom_tag, success=True, order_id=order_id
-                    )
+                # Publish success ack
+                await self._publish_cancel_ack(
+                    custom_tag, success=True, order_id=order_id
+                )
 
-                    # Publish status update
-                    status_update = {
-                        "order_id": order_id,
-                        "custom_tag": custom_tag,
-                        "status": "CANCELLED",
-                        "timestamp": utc_now().isoformat(),
-                    }
-                    await self.event_bus.publish(order_status_update(), status_update)
+                # Publish status update
+                status_update = {
+                    "order_id": order_id,
+                    "custom_tag": custom_tag,
+                    "status": "CANCELLED",
+                    "timestamp": utc_now().isoformat(),
+                }
+                await self.event_bus.publish(order_status_update(), status_update)
 
-                else:
-                    error_msg = f"Cancel failed: {response.status} - {response_text}"
-                    self.logger.error(error_msg)
-                    self._metrics["api_errors"] += 1
+            else:
+                error_msg = f"Cancel failed: {status} - {response_text}"
+                self.logger.error(error_msg)
+                self._metrics["api_errors"] += 1
 
-                    await self._publish_cancel_ack(
-                        custom_tag,
-                        success=False,
-                        error_message=error_msg,
-                        order_id=order_id,
-                    )
+                await self._publish_cancel_ack(
+                    custom_tag,
+                    success=False,
+                    error_message=error_msg,
+                    order_id=order_id,
+                )
 
         except Exception as e:
             error_msg = f"Exception during cancel request: {e}"
@@ -485,51 +534,50 @@ class OrderService:
             url = f"{self.config.projectx_base_url}/api/Account/search"
             payload = {"onlyActiveAccounts": True}
 
-            async with self._session.post(
-                url, json=payload, headers=headers
-            ) as response:
-                if response.status != 200:
-                    error_text = await response.text()
-                    raise RuntimeError(
-                        f"Account search failed: {response.status} - {error_text}"
-                    )
+            status, response_text = await self._request_with_retry(
+                "POST", url, json=payload, headers=headers
+            )
+            if status != 200:
+                raise RuntimeError(
+                    f"Account search failed: {status} - {response_text}"
+                )
 
-                data = await response.json()
-                accounts = data.get("accounts", [])
+            data = json.loads(response_text) if response_text else {}
+            accounts = data.get("accounts", [])
 
-                if not accounts:
-                    raise RuntimeError("No active accounts found for this user")
+            if not accounts:
+                raise RuntimeError("No active accounts found for this user")
 
-                # Check if configured account exists and is valid
-                target_account_id = int(self.config.account_id)
-                account_found = False
+            # Check if configured account exists and is valid
+            target_account_id = int(self.config.account_id)
+            account_found = False
 
-                for account in accounts:
-                    account_id = account.get("id")
-                    account_name = account.get("name", "Unknown")
-                    can_trade = account.get("canTrade", False)
-                    is_visible = account.get("isVisible", False)
+            for account in accounts:
+                account_id = account.get("id")
+                account_name = account.get("name", "Unknown")
+                can_trade = account.get("canTrade", False)
+                is_visible = account.get("isVisible", False)
 
-                    if account_id == target_account_id:
-                        account_found = True
+                if account_id == target_account_id:
+                    account_found = True
 
-                        if not can_trade:
-                            raise RuntimeError(
-                                f"Account {target_account_id} ({account_name}) exists but canTrade=False. "
-                                "Trading is disabled for this account."
-                            )
-
-                        if not is_visible:
-                            raise RuntimeError(
-                                f"Account {target_account_id} ({account_name}) exists but isVisible=False. "
-                                "Account is not visible/accessible."
-                            )
-
-                        self.logger.info(
-                            f"✓ Account {target_account_id} ({account_name}) validated: "
-                            f"canTrade={can_trade}, isVisible={is_visible}"
+                    if not can_trade:
+                        raise RuntimeError(
+                            f"Account {target_account_id} ({account_name}) exists but canTrade=False. "
+                            "Trading is disabled for this account."
                         )
-                        return
+
+                    if not is_visible:
+                        raise RuntimeError(
+                            f"Account {target_account_id} ({account_name}) exists but isVisible=False. "
+                            "Account is not visible/accessible."
+                        )
+
+                    self.logger.info(
+                        f"✓ Account {target_account_id} ({account_name}) validated: "
+                        f"canTrade={can_trade}, isVisible={is_visible}"
+                    )
+                    return
 
                 if not account_found:
                     available_accounts = [
@@ -605,64 +653,63 @@ class OrderService:
             self.logger.debug(f"Sending modify request to {url}: {modify_payload}")
 
             # Make API call
-            async with self._session.post(
-                url, json=modify_payload, headers=headers
-            ) as response:
-                response_text = await response.text()
+            status, response_text = await self._request_with_retry(
+                "POST", url, json=modify_payload, headers=headers
+            )
 
-                if response.status == 200:
-                    # Parse response to check for success
-                    try:
-                        response_data = await response.json() if response_text else {}
-                        success = response_data.get(
-                            "success", True
-                        )  # Default to True for 200
-                        error_message = response_data.get("errorMessage")
+            if status == 200:
+                # Parse response to check for success
+                try:
+                    response_data = json.loads(response_text) if response_text else {}
+                    success = response_data.get(
+                        "success", True
+                    )  # Default to True for 200
+                    error_message = response_data.get("errorMessage")
 
-                        if success:
-                            self.logger.info(f"Order {order_id} modified successfully")
-                            await self._publish_modify_ack(
-                                custom_tag, success=True, order_id=order_id
-                            )
-
-                            # Update internal order tracking if we have it
-                            if custom_tag and custom_tag in self._order_map:
-                                self._order_map[custom_tag]["last_update"] = utc_now()
-                                self._order_map[custom_tag]["modified"] = True
-                                # Update size if it was modified
-                                if "size" in modify_payload:
-                                    self._order_map[custom_tag]["size"] = (
-                                        modify_payload["size"]
-                                    )
-                        else:
-                            error_msg = f"Modify rejected by API: {error_message}"
-                            self.logger.warning(error_msg)
-                            await self._publish_modify_ack(
-                                custom_tag,
-                                success=False,
-                                error_message=error_msg,
-                                order_id=order_id,
-                            )
-
-                    except Exception:
-                        # Handle case where response is 200 but not JSON (some APIs return plain text success)
-                        self.logger.info(
-                            f"Order {order_id} modified successfully (non-JSON response)"
-                        )
+                    if success:
+                        self.logger.info(f"Order {order_id} modified successfully")
                         await self._publish_modify_ack(
                             custom_tag, success=True, order_id=order_id
                         )
 
-                else:
-                    error_msg = f"Modify failed: {response.status} - {response_text}"
-                    self.logger.error(error_msg)
-                    self._metrics["api_errors"] += 1
-                    await self._publish_modify_ack(
-                        custom_tag,
-                        success=False,
-                        error_message=error_msg,
-                        order_id=order_id,
+                        # Update internal order tracking if we have it
+                        if custom_tag and custom_tag in self._order_map:
+                            self._order_map[custom_tag]["last_update"] = utc_now()
+                            self._order_map[custom_tag]["modified"] = True
+                            # Update size if it was modified
+                            if "size" in modify_payload:
+                                self._order_map[custom_tag]["size"] = (
+                                    modify_payload["size"]
+                                )
+                    else:
+                        error_msg = f"Modify rejected by API: {error_message}"
+                        self.logger.warning(error_msg)
+                        await self._publish_modify_ack(
+                            custom_tag,
+                            success=False,
+                            error_message=error_msg,
+                            order_id=order_id,
+                        )
+
+                except Exception:
+                    # Handle case where response is 200 but not JSON (some APIs return plain text success)
+                    self.logger.info(
+                        f"Order {order_id} modified successfully (non-JSON response)"
                     )
+                    await self._publish_modify_ack(
+                        custom_tag, success=True, order_id=order_id
+                    )
+
+            else:
+                error_msg = f"Modify failed: {status} - {response_text}"
+                self.logger.error(error_msg)
+                self._metrics["api_errors"] += 1
+                await self._publish_modify_ack(
+                    custom_tag,
+                    success=False,
+                    error_message=error_msg,
+                    order_id=order_id,
+                )
 
         except Exception as e:
             error_msg = f"Exception during modify request: {e}"
@@ -854,15 +901,17 @@ class OrderService:
         # Submit order to ProjectX Gateway API
         url = f"{self.config.projectx_base_url}/api/Order/place"
 
-        async with self._session.post(
-            url, json=payload, headers=headers, 
-            timeout=aiohttp.ClientTimeout(total=10, connect=3)
-        ) as response:
-            if response.status != 200:
-                error_text = await response.text()
-                raise RuntimeError(f"Order API error {response.status}: {error_text}")
+        status, text = await self._request_with_retry(
+            "POST",
+            url,
+            json=payload,
+            headers=headers,
+            timeout=aiohttp.ClientTimeout(total=10, connect=3),
+        )
+        if status != 200:
+            raise RuntimeError(f"Order API error {status}: {text}")
 
-            return await response.json()
+        return json.loads(text) if text else {}
 
     async def _process_submit_response(
         self, intent: OrderIntent, response: Dict[str, Any]

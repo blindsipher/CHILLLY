@@ -106,3 +106,8 @@ def strategy_add() -> str:
 def strategy_remove() -> str:
     """Topic for runtime strategy removal"""
     return "system.strategy.remove"
+
+
+def service_error(service: str) -> str:
+    """Topic for service-level errors: service.error.SERVICE"""
+    return f"service.error.{service}"
