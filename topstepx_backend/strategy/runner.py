@@ -2,6 +2,8 @@
 
 import asyncio
 import logging
+import time
+import multiprocessing as mp
 from typing import Dict, List, Optional, Any, Tuple
 from dataclasses import dataclass
 
@@ -22,6 +24,13 @@ class StrategyInstance:
     config: Dict[str, Any]
     subscriptions: List[Subscription]
     running: bool = False
+    run_mode: str = "task"
+    queue: Any = None
+    worker: Any = None
+    metrics_queue: Any = None
+    metrics: Dict[str, Any] = None
+    monitor_task: Optional[asyncio.Task] = None
+    metrics_task: Optional[asyncio.Task] = None
 
 
 class StrategyRunner:
@@ -177,6 +186,43 @@ class StrategyRunner:
         for strategy_id, instance in self._strategies.items():
             await self._start_strategy_instance(strategy_id, instance)
 
+    async def _initialize_strategy_worker(
+        self, strategy_id: str, instance: StrategyInstance
+    ) -> None:
+        """Create worker (task or process) for a strategy."""
+        exec_cfg = instance.config.get("execution", {})
+        run_mode = exec_cfg.get("mode", "task").lower()
+        instance.run_mode = run_mode
+        instance.metrics = {
+            "events": 0,
+            "total_latency": 0.0,
+            "start_time": time.time(),
+            "last_processed": None,
+        }
+        max_queue = exec_cfg.get("max_queue", 1000)
+
+        if run_mode == "process":
+            instance.queue = mp.Queue(max_queue)
+            instance.metrics_queue = mp.Queue()
+            resources = exec_cfg.get("resources", {})
+            process = mp.Process(
+                target=_strategy_process_worker,
+                args=(instance.config, resources, instance.queue, instance.metrics_queue),
+                daemon=True,
+            )
+            process.start()
+            instance.worker = process
+            # Collect metrics asynchronously
+            instance.metrics_task = asyncio.create_task(
+                self._collect_metrics(strategy_id, instance)
+            )
+        else:
+            # Default to in-process asyncio task
+            instance.queue = asyncio.Queue(maxsize=max_queue)
+            instance.worker = asyncio.create_task(
+                self._strategy_worker(strategy_id, instance)
+            )
+
     async def _start_strategy_instance(
         self, strategy_id: str, instance: StrategyInstance
     ) -> None:
@@ -193,11 +239,19 @@ class StrategyRunner:
             # Call strategy's on_start method
             await instance.strategy.on_start(instance.context)
 
+            # Initialize worker and metrics
+            await self._initialize_strategy_worker(strategy_id, instance)
+
             # Set up subscriptions
             await self._setup_strategy_subscriptions(instance)
 
             instance.running = True
             instance.strategy._running = True
+
+            # Start health monitor
+            instance.monitor_task = asyncio.create_task(
+                self._monitor_worker(strategy_id, instance)
+            )
 
             self.logger.info(f"Strategy started: {strategy_id}")
 
@@ -266,13 +320,21 @@ class StrategyRunner:
                     break
 
                 try:
-                    # Convert payload to Bar object
-                    bar = self._payload_to_bar(payload)
-                    if bar:
-                        await instance.strategy.on_bar(bar, instance.context)
+                    event_ts = time.perf_counter()
+                    if instance.run_mode == "process":
+                        try:
+                            instance.queue.put(("bar", payload, event_ts), block=False)
+                        except Exception:
+                            self.logger.warning(
+                                f"Event queue full for strategy {strategy_id}"
+                            )
+                    else:
+                        instance.queue.put_nowait(("bar", payload, event_ts))
 
                 except Exception as e:
-                    self.logger.error(f"Error in strategy {strategy_id} on_bar: {e}")
+                    self.logger.error(
+                        f"Failed to enqueue bar for strategy {strategy_id}: {e}"
+                    )
 
         except asyncio.CancelledError:
             self.logger.debug(f"Bar consumer cancelled for strategy: {strategy_id}")
@@ -297,12 +359,20 @@ class StrategyRunner:
                     break
 
                 try:
-                    timeframe = payload.get("timeframe", instance.config["timeframe"])
-                    await instance.strategy.on_boundary(timeframe, instance.context)
+                    event_ts = time.perf_counter()
+                    if instance.run_mode == "process":
+                        try:
+                            instance.queue.put(("boundary", payload, event_ts), block=False)
+                        except Exception:
+                            self.logger.warning(
+                                f"Event queue full for strategy {strategy_id}"
+                            )
+                    else:
+                        instance.queue.put_nowait(("boundary", payload, event_ts))
 
                 except Exception as e:
                     self.logger.error(
-                        f"Error in strategy {strategy_id} on_boundary: {e}"
+                        f"Failed to enqueue boundary for strategy {strategy_id}: {e}"
                     )
 
         except asyncio.CancelledError:
@@ -313,6 +383,112 @@ class StrategyRunner:
             self.logger.error(
                 f"Boundary consumer error for strategy {strategy_id}: {e}"
             )
+
+    async def _strategy_worker(self, strategy_id: str, instance: StrategyInstance) -> None:
+        """Process events from queue for a strategy running in-task."""
+        queue: asyncio.Queue = instance.queue
+        strategy = instance.strategy
+        ctx = instance.context
+        while True:
+            try:
+                event_type, payload, enqueue_ts = await queue.get()
+            except asyncio.CancelledError:
+                break
+
+            try:
+                if event_type == "bar":
+                    bar = self._payload_to_bar(payload)
+                    if bar:
+                        await strategy.on_bar(bar, ctx)
+                elif event_type == "boundary":
+                    timeframe = payload.get("timeframe", instance.config["timeframe"]) if isinstance(payload, dict) else payload
+                    await strategy.on_boundary(timeframe, ctx)
+            except Exception as e:
+                self.logger.error(f"Error in strategy {strategy_id} worker: {e}")
+            finally:
+                now = time.perf_counter()
+                latency = now - enqueue_ts
+                m = instance.metrics
+                m["events"] += 1
+                m["total_latency"] += latency
+                m["last_processed"] = time.time()
+                queue.task_done()
+
+    async def _collect_metrics(self, strategy_id: str, instance: StrategyInstance) -> None:
+        """Collect metrics from a subprocess worker."""
+        loop = asyncio.get_running_loop()
+        q: mp.Queue = instance.metrics_queue
+        while True:
+            try:
+                data = await loop.run_in_executor(None, q.get)
+            except asyncio.CancelledError:
+                break
+            if data is None:
+                break
+            processed_ts, enqueue_ts = data
+            m = instance.metrics
+            m["events"] += 1
+            m["total_latency"] += processed_ts - enqueue_ts
+            m["last_processed"] = processed_ts
+
+    async def _monitor_worker(self, strategy_id: str, instance: StrategyInstance) -> None:
+        """Monitor worker health and restart if needed."""
+        exec_cfg = instance.config.get("execution", {})
+        interval = exec_cfg.get("health_interval", 5)
+        timeout = exec_cfg.get("heartbeat_timeout", 30)
+        while instance.running:
+            await asyncio.sleep(interval)
+            if instance.run_mode == "process":
+                if not instance.worker.is_alive():
+                    self.logger.warning(
+                        f"Strategy {strategy_id} process died; restarting"
+                    )
+                    await self._restart_strategy_worker(strategy_id, instance)
+                    continue
+            else:
+                if instance.worker.done():
+                    self.logger.warning(
+                        f"Strategy {strategy_id} task ended; restarting"
+                    )
+                    await self._restart_strategy_worker(strategy_id, instance)
+                    continue
+
+            last = instance.metrics.get("last_processed")
+            if last and time.time() - last > timeout:
+                self.logger.warning(
+                    f"Strategy {strategy_id} unresponsive; restarting"
+                )
+                await self._restart_strategy_worker(strategy_id, instance)
+
+    async def _restart_strategy_worker(
+        self, strategy_id: str, instance: StrategyInstance
+    ) -> None:
+        """Restart a strategy's worker task or process."""
+        exec_cfg = instance.config.get("execution", {})
+        # Stop current worker
+        try:
+            if instance.run_mode == "process":
+                if instance.queue:
+                    try:
+                        instance.queue.put(("stop", None, time.perf_counter()), block=False)
+                    except Exception:
+                        pass
+                if instance.worker and instance.worker.is_alive():
+                    instance.worker.terminate()
+                if instance.metrics_task:
+                    instance.metrics_task.cancel()
+            else:
+                if instance.worker:
+                    instance.worker.cancel()
+                    try:
+                        await instance.worker
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+        # Reinitialize worker
+        await self._initialize_strategy_worker(strategy_id, instance)
 
     def _payload_to_bar(self, payload: Any) -> Optional[Bar]:
         """
@@ -384,6 +560,27 @@ class StrategyRunner:
             instance.running = False
             instance.strategy._running = False
 
+            # Stop worker and monitor
+            if instance.monitor_task:
+                instance.monitor_task.cancel()
+            if instance.metrics_task:
+                instance.metrics_task.cancel()
+            if instance.run_mode == "process":
+                if instance.queue:
+                    try:
+                        instance.queue.put(("stop", None, time.perf_counter()), block=False)
+                    except Exception:
+                        pass
+                if instance.worker and instance.worker.is_alive():
+                    instance.worker.terminate()
+            else:
+                if instance.worker:
+                    instance.worker.cancel()
+                    try:
+                        await instance.worker
+                    except Exception:
+                        pass
+
             # Call strategy's on_stop method
             await instance.strategy.on_stop(instance.context)
 
@@ -416,6 +613,15 @@ class StrategyRunner:
         for strategy_id, instance in self._strategies.items():
             strategy_stats = instance.strategy.get_state()
             strategy_stats["context_metrics"] = instance.context.get_metrics()
+            if instance.metrics:
+                m = instance.metrics
+                avg_latency = (
+                    m["total_latency"] / m["events"] if m["events"] else 0.0
+                )
+                elapsed = time.time() - m["start_time"]
+                throughput = m["events"] / elapsed if elapsed > 0 else 0.0
+                strategy_stats["latency_ms"] = avg_latency * 1000
+                strategy_stats["throughput_eps"] = throughput
             stats["strategies"][strategy_id] = strategy_stats
 
         return stats
@@ -443,3 +649,102 @@ class StrategyRunner:
             (strategy_id, instance.running)
             for strategy_id, instance in self._strategies.items()
         ]
+
+
+def _strategy_process_worker(
+    config: Dict[str, Any],
+    resources: Dict[str, Any],
+    event_q: mp.Queue,
+    metrics_q: mp.Queue,
+) -> None:
+    """Entry point for strategy subprocess worker."""
+    import resource
+    from datetime import datetime
+
+    # Apply resource limits if provided
+    if resources.get("cpu") is not None:
+        limit = int(resources["cpu"])
+        try:
+            resource.setrlimit(resource.RLIMIT_CPU, (limit, limit))
+        except Exception:
+            pass
+    if resources.get("memory") is not None:
+        limit = int(resources["memory"])
+        try:
+            resource.setrlimit(resource.RLIMIT_AS, (limit, limit))
+        except Exception:
+            pass
+
+    async def run() -> None:
+        registry = StrategyRegistry()
+        registry.discover_strategy_classes()
+        strategy = registry.create_strategy_instance(config)
+        if not strategy:
+            return
+
+        risk_cfg = config.get("risk", {})
+        risk_limits = RiskLimits(
+            max_position_size=risk_cfg.get("max_position_size", 10),
+            max_daily_loss=risk_cfg.get("max_daily_loss", 1000.0),
+            max_order_size=risk_cfg.get("max_order_size", 5),
+            max_orders_per_minute=risk_cfg.get("max_orders_per_minute", 10),
+        )
+
+        event_bus = EventBus()
+        ctx = StrategyContext(
+            strategy_id=config["strategy_id"],
+            event_bus=event_bus,
+            logger=strategy.logger,
+            account_id=config["account_id"],
+            contract_id=config["contract_id"],
+            timeframe=config["timeframe"],
+            risk_limits=risk_limits,
+        )
+
+        def payload_to_bar(payload: Any) -> Optional[Bar]:
+            if isinstance(payload, dict):
+                timestamp = payload.get("timestamp")
+                if isinstance(timestamp, str):
+                    timestamp = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+                return Bar(
+                    timestamp=timestamp,
+                    contract_id=payload["contract_id"],
+                    timeframe=payload["timeframe"],
+                    open=float(payload["open"]),
+                    high=float(payload["high"]),
+                    low=float(payload["low"]),
+                    close=float(payload["close"]),
+                    volume=int(payload["volume"]),
+                    source=payload.get("source", "unknown"),
+                    revision=int(payload.get("revision", 1)),
+                )
+            elif isinstance(payload, Bar):
+                return payload
+            return None
+
+        await strategy.on_start(ctx)
+        while True:
+            item = event_q.get()
+            if not item:
+                continue
+            event_type, payload, enqueue_ts = item
+            if event_type == "stop":
+                break
+            try:
+                if event_type == "bar":
+                    bar = payload_to_bar(payload)
+                    if bar:
+                        await strategy.on_bar(bar, ctx)
+                elif event_type == "boundary":
+                    timeframe = (
+                        payload.get("timeframe", config["timeframe"])
+                        if isinstance(payload, dict)
+                        else payload
+                    )
+                    await strategy.on_boundary(timeframe, ctx)
+            finally:
+                metrics_q.put((time.time(), enqueue_ts))
+
+        await strategy.on_stop(ctx)
+
+    asyncio.run(run())
