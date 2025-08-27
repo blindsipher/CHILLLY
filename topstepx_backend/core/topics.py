@@ -96,3 +96,13 @@ def account_balance_update() -> str:
 def trade_update() -> str:
     """Topic for trade updates from SignalR"""
     return "trade.update"
+
+# Strategy management topics
+def strategy_add() -> str:
+    """Topic for runtime strategy addition"""
+    return "system.strategy.add"
+
+
+def strategy_remove() -> str:
+    """Topic for runtime strategy removal"""
+    return "system.strategy.remove"

@@ -248,3 +248,59 @@ class StrategyRegistry:
             for config in self._strategy_configs
             if config.get("strategy_id")
         ]
+
+    # ------------------------------------------------------------------
+    # Dynamic configuration management
+    # ------------------------------------------------------------------
+
+    def add_or_update_config(self, config: Dict[str, Any]) -> None:
+        """Add a new strategy config or update an existing one in memory."""
+        strategy_id = config.get("strategy_id")
+        if not strategy_id:
+            return
+
+        for idx, existing in enumerate(self._strategy_configs):
+            if existing.get("strategy_id") == strategy_id:
+                self._strategy_configs[idx] = config
+                break
+        else:
+            self._strategy_configs.append(config)
+
+    def remove_strategy_config(self, strategy_id: str) -> None:
+        """Remove a strategy configuration from memory."""
+        self._strategy_configs = [
+            cfg for cfg in self._strategy_configs if cfg.get("strategy_id") != strategy_id
+        ]
+
+    def reload_strategy_config(self, strategy_id: str) -> Optional[Dict[str, Any]]:
+        """Reload a single strategy configuration from the YAML file."""
+        try:
+            config_file = Path(self.config_path)
+            if not config_file.exists():
+                self.logger.warning(
+                    f"Strategy config file not found: {self.config_path}"
+                )
+                return None
+
+            with open(config_file, "r", encoding="utf-8") as f:
+                config_data = yaml.safe_load(f) or {}
+
+            strategies = config_data.get("strategies", [])
+            for cfg in strategies:
+                if cfg.get("strategy_id") == strategy_id:
+                    self.add_or_update_config(cfg)
+                    self.logger.info(
+                        f"Reloaded strategy configuration for {strategy_id}"
+                    )
+                    return cfg
+
+            self.logger.warning(
+                f"Strategy configuration not found in file: {strategy_id}"
+            )
+            return None
+
+        except Exception as e:
+            self.logger.error(
+                f"Failed to reload strategy configuration {strategy_id}: {e}"
+            )
+            return None
