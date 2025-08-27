@@ -64,6 +64,7 @@ from topstepx_backend.api.routes.strategies import router as strategies_router
 from topstepx_backend.api.routes.account import router as account_router
 from topstepx_backend.api.routes.market_data import router as market_data_router
 from topstepx_backend.api.routes.system import router as system_router
+from topstepx_backend.api.routes.subscriptions import router as subscriptions_router
 
 
 class APIServer(Service):
@@ -91,6 +92,7 @@ class APIServer(Service):
         self.app.include_router(account_router)
         self.app.include_router(market_data_router)
         self.app.include_router(system_router)
+        self.app.include_router(subscriptions_router)
 
         self._setup_routes()
 
