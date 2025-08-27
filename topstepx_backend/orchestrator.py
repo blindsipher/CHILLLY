@@ -33,6 +33,7 @@ from topstepx_backend.strategy.registry import StrategyRegistry
 from topstepx_backend.networking.subscription_manager import SubscriptionManager
 from topstepx_backend.services.risk_manager import RiskManager
 from topstepx_backend.api.server import APIServer
+from topstepx_backend.analytics.strategy_analytics import StrategyAnalytics
 
 
 class SystemHealth:
@@ -128,6 +129,7 @@ class TopstepXOrchestrator:
         # Trading services
         self.order_service: Optional[OrderService] = None
         self.risk_manager: Optional[RiskManager] = None
+        self.strategy_analytics: Optional[StrategyAnalytics] = None
         self.strategy_runner: Optional[StrategyRunner] = None
         self.api_server: Optional[APIServer] = None
 
@@ -204,6 +206,7 @@ class TopstepXOrchestrator:
             self.order_service = OrderService(
                 self.event_bus, self.auth_manager, self.config, self.rate_limiter
             )
+            self.strategy_analytics = StrategyAnalytics(self.event_bus)
             registry = StrategyRegistry()
             self.strategy_runner = StrategyRunner(
                 self.event_bus,
@@ -230,6 +233,7 @@ class TopstepXOrchestrator:
                 self.user_hub,
                 self.risk_manager,
                 self.order_service,
+                self.strategy_analytics,
                 self.strategy_runner,
                 self.api_server,
             ]
@@ -481,6 +485,9 @@ class TopstepXOrchestrator:
         # Add persistence service metrics
         if self.persistence:
             status["persistence"] = self.persistence.get_metrics()
+
+        if self.strategy_analytics:
+            status["strategy_analytics"] = self.strategy_analytics.get_metrics()
 
         return status
 
