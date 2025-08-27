@@ -1,9 +1,14 @@
 """Strategy registry for discovering and instantiating trading strategies."""
 
+from __future__ import annotations
+
 import importlib
+import importlib.util
 import logging
-from typing import Dict, List, Any, Optional, Type
+import sys
 from pathlib import Path
+from typing import Any, Dict, List, Optional, Type
+
 import yaml
 
 from topstepx_backend.strategy.base import Strategy
@@ -14,10 +19,13 @@ class StrategyRegistry:
     Registry for discovering and instantiating trading strategies.
 
     Loads strategy configurations from YAML files and dynamically
-    imports strategy classes from the strategy.examples package.
+    imports strategy classes from the strategy.examples package. It can also
+    discover user supplied strategy plugins from a ``strategies/`` directory at
+    the project root. This enables strategies to be dropped in without
+    modifying the core package.
     """
 
-    def __init__(self, config_path: Optional[str] = None):
+    def __init__(self, config_path: Optional[str] = None, plugin_dir: str = "strategies"):
         """
         Initialize strategy registry.
 
@@ -30,6 +38,8 @@ class StrategyRegistry:
         )
         self._strategy_classes: Dict[str, Type[Strategy]] = {}
         self._strategy_configs: List[Dict[str, Any]] = []
+        # Directory containing drop-in strategy plugins
+        self.plugin_path = Path(plugin_dir)
 
     def load_configurations(self) -> List[Dict[str, Any]]:
         """
@@ -71,62 +81,99 @@ class StrategyRegistry:
             return []
 
     def discover_strategy_classes(self) -> Dict[str, Type[Strategy]]:
-        """
-        Discover strategy classes from the strategy.examples package.
+        """Discover available strategy classes.
+
+        This scans both the built in examples package as well as the optional
+        ``strategies`` plugin directory. Discovered classes are cached on the
+        registry instance.
 
         Returns:
             Dictionary mapping class paths to strategy classes
         """
-        strategy_classes = {}
+
+        strategy_classes: Dict[str, Type[Strategy]] = {}
 
         try:
-            # Import examples package to discover strategies
-            examples_package = "topstepx_backend.strategy.examples"
-
-            # Get the examples directory path
-            examples_path = Path(__file__).parent / "examples"
-            if not examples_path.exists():
-                self.logger.warning(f"Examples directory not found: {examples_path}")
-                return strategy_classes
-
-            # Discover Python files in examples directory
-            for py_file in examples_path.glob("*.py"):
-                if py_file.name.startswith("__"):
-                    continue
-
-                module_name = py_file.stem
-                full_module = f"{examples_package}.{module_name}"
-
-                try:
-                    # Import the module
-                    module = importlib.import_module(full_module)
-
-                    # Find Strategy subclasses
-                    for attr_name in dir(module):
-                        attr = getattr(module, attr_name)
-                        if (
-                            isinstance(attr, type)
-                            and issubclass(attr, Strategy)
-                            and attr is not Strategy
-                        ):
-                            class_path = f"{full_module}.{attr_name}"
-                            strategy_classes[class_path] = attr
-                            self.logger.debug(
-                                f"Discovered strategy class: {class_path}"
-                            )
-
-                except ImportError as e:
-                    self.logger.error(f"Failed to import {full_module}: {e}")
-                except Exception as e:
-                    self.logger.error(f"Error processing {full_module}: {e}")
-
-        except Exception as e:
+            strategy_classes.update(self._discover_example_classes())
+            strategy_classes.update(self._discover_plugin_classes())
+        except Exception as e:  # pragma: no cover - defensive
             self.logger.error(f"Failed to discover strategy classes: {e}")
 
         self._strategy_classes = strategy_classes
         self.logger.info(f"Discovered {len(strategy_classes)} strategy classes")
-
         return strategy_classes
+
+    # ------------------------------------------------------------------
+    # Discovery helpers
+    # ------------------------------------------------------------------
+
+    def _discover_example_classes(self) -> Dict[str, Type[Strategy]]:
+        """Load strategy classes from the bundled examples package."""
+        classes: Dict[str, Type[Strategy]] = {}
+
+        examples_package = "topstepx_backend.strategy.examples"
+        examples_path = Path(__file__).parent / "examples"
+        if not examples_path.exists():
+            self.logger.warning(f"Examples directory not found: {examples_path}")
+            return classes
+
+        for py_file in examples_path.glob("*.py"):
+            if py_file.name.startswith("__"):
+                continue
+            module_name = py_file.stem
+            full_module = f"{examples_package}.{module_name}"
+            try:
+                module = importlib.import_module(full_module)
+                self._extract_strategy_classes(module, full_module, classes)
+            except Exception as e:  # pragma: no cover - importlib errors
+                self.logger.error(f"Failed to import {full_module}: {e}")
+
+        return classes
+
+    def _discover_plugin_classes(self) -> Dict[str, Type[Strategy]]:
+        """Load strategy classes from the ``strategies`` plugin directory."""
+        classes: Dict[str, Type[Strategy]] = {}
+        if not self.plugin_path.exists():
+            return classes
+
+        for py_file in self.plugin_path.glob("*.py"):
+            if py_file.name.startswith("__"):
+                continue
+
+            module_name = py_file.stem
+            full_module = f"strategies.{module_name}"
+
+            try:
+                spec = importlib.util.spec_from_file_location(full_module, py_file)
+                if not spec or not spec.loader:  # pragma: no cover - unlikely
+                    continue
+                module = importlib.util.module_from_spec(spec)
+                sys.modules[full_module] = module
+                spec.loader.exec_module(module)  # type: ignore[attr-defined]
+
+                self._extract_strategy_classes(module, full_module, classes)
+            except Exception as e:  # pragma: no cover - importlib errors
+                self.logger.error(f"Failed to load plugin {full_module}: {e}")
+
+        return classes
+
+    def _extract_strategy_classes(
+        self,
+        module: Any,
+        module_path: str,
+        target: Dict[str, Type[Strategy]],
+    ) -> None:
+        """Extract Strategy subclasses from a module and add to mapping."""
+        for attr_name in dir(module):
+            attr = getattr(module, attr_name)
+            if (
+                isinstance(attr, type)
+                and issubclass(attr, Strategy)
+                and attr is not Strategy
+            ):
+                class_path = f"{module_path}.{attr_name}"
+                target[class_path] = attr
+                self.logger.debug(f"Discovered strategy class: {class_path}")
 
     def create_strategy_instance(self, config: Dict[str, Any]) -> Optional[Strategy]:
         """
