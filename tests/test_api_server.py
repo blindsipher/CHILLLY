@@ -12,6 +12,15 @@ class DummyAuth:
         return "token"
 
 
+class DummyStrategyRunner:
+    def __init__(self) -> None:
+        self.stats_called = False
+
+    def get_strategy_stats(self):
+        self.stats_called = True
+        return {"running": False}
+
+
 class DummyOrchestrator:
     def __init__(self) -> None:
         self.event_bus = EventBus()
@@ -20,6 +29,7 @@ class DummyOrchestrator:
         self.submit_payload = None
         self.add_payload = None
         self.remove_id = None
+        self.strategy_runner = DummyStrategyRunner()
 
     def get_system_status(self):
         self.status_called = True
@@ -74,6 +84,12 @@ def test_rest_endpoints():
     data = StrategyResponse(**resp.json())
     assert data.status == "removed"
     assert orch.remove_id == "abc"
+
+    # metrics
+    resp = client.get("/metrics")
+    assert resp.status_code == 200
+    assert resp.json() == {"running": False}
+    assert orch.strategy_runner.stats_called
 
 
 def test_websocket_gateway():

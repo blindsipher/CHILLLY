@@ -96,6 +96,16 @@ class APIServer(Service):
         async def status() -> StatusResponse:
             return StatusResponse(**self.orchestrator.get_system_status())
 
+        @self.app.get("/metrics")
+        async def metrics() -> Dict[str, Any]:
+            """Return strategy metrics from the orchestrator."""
+            runner = getattr(self.orchestrator, "strategy_runner", None)
+            if runner is None:
+                raise HTTPException(
+                    status_code=503, detail="Strategy runner not initialized"
+                )
+            return runner.get_strategy_stats()
+
         @self.app.post("/auth/token", response_model=TokenResponse)
         async def auth_token(request: TokenRequest) -> TokenResponse:
             try:
