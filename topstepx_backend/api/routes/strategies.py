@@ -1,7 +1,10 @@
 from typing import Any, Dict, List
 import inspect
 
-from fastapi import APIRouter, Request
+try:  # pragma: no cover
+    from fastapi import APIRouter, Request  # type: ignore
+except Exception:  # pragma: no cover
+    from topstepx_backend.api.router_stub import APIRouter, Request  # type: ignore
 
 from topstepx_backend.api.server import StrategyResponse
 

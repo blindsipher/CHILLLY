@@ -100,6 +100,12 @@ Run the unit tests with pytest:
 pytest
 ```
 
+The repository includes lightweight stubs for external libraries such as
+FastAPI, Uvicorn and Pydantic to keep the test environment self‑contained. These
+stand-ins implement only the minimal surface used by the tests and should be
+replaced with the real packages when running the application in a full
+environment.
+
 ## Manual API/WebSocket Testing
 A barebones HTML dashboard is available at `docs/test_dashboard.html` to exercise the REST endpoints and WebSocket streams. Open the file in a browser and adjust the base URL/token fields to match your running backend.
 

@@ -3,7 +3,11 @@ import re
 from typing import Optional, List
 from dataclasses import dataclass, field
 from urllib.parse import urlparse
-from dotenv import load_dotenv
+try:  # pragma: no cover - optional dependency for tests
+    from dotenv import load_dotenv  # type: ignore
+except Exception:  # pragma: no cover - environment without python-dotenv
+    def load_dotenv(*args, **kwargs):  # type: ignore
+        return False
 
 from .profiles import (
     BaseProfile,

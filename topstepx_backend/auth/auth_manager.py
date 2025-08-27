@@ -1,9 +1,13 @@
 import asyncio
-import aiohttp
 import logging
 from datetime import datetime, timedelta
-from typing import Optional, Dict
 from dataclasses import dataclass
+from typing import Optional, Dict
+
+try:  # pragma: no cover - optional dependency for tests
+    import aiohttp  # type: ignore
+except Exception:  # pragma: no cover - minimal stub when aiohttp missing
+    aiohttp = None  # type: ignore
 
 from topstepx_backend.config.settings import TopstepConfig
 from topstepx_backend.networking.api_helpers import auth_headers, utc_now

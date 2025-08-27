@@ -1,7 +1,10 @@
 from typing import Any, Dict
 import inspect
 
-from fastapi import APIRouter, Request
+try:  # pragma: no cover - fastapi may be stubbed in tests
+    from fastapi import APIRouter, Request  # type: ignore
+except Exception:  # pragma: no cover - fallback
+    from topstepx_backend.api.router_stub import APIRouter, Request  # type: ignore
 
 from topstepx_backend.api.server import OrderRequest, StatusResponse
 
