@@ -30,6 +30,21 @@ class OrderRequest(BaseModel):
     custom_tag: Optional[str] = None
 
 
+class StatusResponse(BaseModel):
+    """Standard response schema with a status message."""
+
+    status: str
+
+    class Config:
+        extra = "allow"
+
+
+class StrategyResponse(BaseModel):
+    """Response schema for strategy operations."""
+
+    status: str
+
+
 class APIServer(Service):
     """FastAPI based HTTP server exposing orchestrator operations."""
 
@@ -56,24 +71,24 @@ class APIServer(Service):
     def _setup_routes(self) -> None:
         """Configure REST and WebSocket endpoints."""
 
-        @self.app.get("/status")
-        async def status() -> Dict[str, Any]:
-            return self.orchestrator.get_system_status()
+        @self.app.get("/status", response_model=StatusResponse)
+        async def status() -> StatusResponse:
+            return StatusResponse(**self.orchestrator.get_system_status())
 
-        @self.app.post("/orders")
-        async def submit_order(order: OrderRequest) -> Dict[str, str]:
+        @self.app.post("/orders", response_model=StatusResponse)
+        async def submit_order(order: OrderRequest) -> StatusResponse:
             await self.orchestrator.submit_order(order.dict())
-            return {"status": "submitted"}
+            return StatusResponse(status="submitted")
 
-        @self.app.post("/strategies")
-        async def add_strategy(config: Dict[str, Any]) -> Dict[str, str]:
+        @self.app.post("/strategies", response_model=StrategyResponse)
+        async def add_strategy(config: Dict[str, Any]) -> StrategyResponse:
             await self.orchestrator.add_strategy(config)
-            return {"status": "added"}
+            return StrategyResponse(status="added")
 
-        @self.app.delete("/strategies/{strategy_id}")
-        async def remove_strategy(strategy_id: str) -> Dict[str, str]:
+        @self.app.delete("/strategies/{strategy_id}", response_model=StrategyResponse)
+        async def remove_strategy(strategy_id: str) -> StrategyResponse:
             await self.orchestrator.remove_strategy(strategy_id)
-            return {"status": "removed"}
+            return StrategyResponse(status="removed")
 
         async def _ws_handler(
             websocket: WebSocket, token: str, path_patterns: str = ""
