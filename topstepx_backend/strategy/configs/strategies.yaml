@@ -40,7 +40,7 @@ strategies:
 
   # Moving Average Crossover Strategy
   - strategy_id: "ma_crossover_generic"
-    class: "strategies.moving_average_crossover.MovingAverageCrossoverStrategy"
+    class: "topstepx_backend.strategy.examples.moving_average_crossover.MovingAverageCrossoverStrategy"
     account_id: 123456
     contract_id: "ESU5"
     timeframe: "5m"
@@ -57,7 +57,7 @@ strategies:
 
   # Bollinger Band Mean Reversion
   - strategy_id: "bollinger_reversion_generic"
-    class: "strategies.bollinger_reversion.BollingerReversionStrategy"
+    class: "topstepx_backend.strategy.examples.bollinger_reversion.BollingerReversionStrategy"
     account_id: 123456
     contract_id: "NQU5"
     timeframe: "1m"
@@ -73,7 +73,7 @@ strategies:
 
   # VWAP Mean Reversion
   - strategy_id: "vwap_reversion_generic"
-    class: "strategies.vwap_reversion.VWAPReversionStrategy"
+    class: "topstepx_backend.strategy.examples.vwap_reversion.VWAPReversionStrategy"
     account_id: 123456
     contract_id: "CLV5"
     timeframe: "1m"
@@ -89,7 +89,7 @@ strategies:
 
   # Opening Range Breakout
   - strategy_id: "opening_range_generic"
-    class: "strategies.opening_range_breakout.OpeningRangeBreakoutStrategy"
+    class: "topstepx_backend.strategy.examples.opening_range_breakout.OpeningRangeBreakoutStrategy"
     account_id: 123456
     contract_id: "GCZ5"
     timeframe: "1m"
@@ -104,7 +104,7 @@ strategies:
 
   # MACD Trend Strategy
   - strategy_id: "macd_trend_generic"
-    class: "strategies.macd_trend.MACDTrendStrategy"
+    class: "topstepx_backend.strategy.examples.macd_trend.MACDTrendStrategy"
     account_id: 123456
     contract_id: "YMZ5"
     timeframe: "5m"
@@ -121,7 +121,7 @@ strategies:
 
   # RSI Reversal Strategy
   - strategy_id: "rsi_reversal_generic"
-    class: "strategies.rsi_reversal.RSIReversalStrategy"
+    class: "topstepx_backend.strategy.examples.rsi_reversal.RSIReversalStrategy"
     account_id: 123456
     contract_id: "6EU5"
     timeframe: "1m"
