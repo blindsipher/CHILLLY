@@ -75,17 +75,34 @@ class APIServer(Service):
             await self.orchestrator.remove_strategy(strategy_id)
             return {"status": "removed"}
 
-        @self.app.websocket("/ws/{token}")
-        async def websocket_endpoint(websocket: WebSocket, token: str) -> None:
+        async def _ws_handler(
+            websocket: WebSocket, token: str, path_patterns: str = ""
+        ) -> None:
             await websocket.accept()
             try:
-                await self.ws_gateway.connect(websocket, token)
+                patterns = []
+                if path_patterns:
+                    patterns.extend([p for p in path_patterns.split(",") if p])
+                query = websocket.query_params.get("patterns")
+                if query:
+                    patterns.extend([p for p in query.split(",") if p])
+                await self.ws_gateway.connect(websocket, token, patterns)
                 while True:
                     await websocket.receive_text()
             except WebSocketDisconnect:
                 pass
             finally:
                 await self.ws_gateway.disconnect(websocket)
+
+        @self.app.websocket("/ws/{token}")
+        async def websocket_endpoint(websocket: WebSocket, token: str) -> None:
+            await _ws_handler(websocket, token)
+
+        @self.app.websocket("/ws/{token}/{path_patterns:path}")
+        async def websocket_endpoint_patterns(
+            websocket: WebSocket, token: str, path_patterns: str
+        ) -> None:
+            await _ws_handler(websocket, token, path_patterns)
 
     # ------------------------------------------------------------------
     async def start(self) -> None:  # pragma: no cover - uvicorn handled in integration
