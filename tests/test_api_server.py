@@ -30,6 +30,24 @@ class DummyOrchestrator:
         self.add_payload = None
         self.remove_id = None
         self.strategy_runner = DummyStrategyRunner()
+        # Tracking for new endpoints
+        self.contracts_called = False
+        self.market_data_contract = None
+        self.bars_contract = None
+        self.quotes_contract = None
+        self.positions_called = False
+        self.account_called = False
+        self.trades_called = False
+        self.orders_called = False
+        self.order_lookup = None
+        self.list_strat_called = False
+        self.list_avail_called = False
+        self.strategy_perf_id = None
+        self.update_strategy_id = None
+        self.update_strategy_cfg = None
+        self.health_called = False
+        self.logs_called = False
+        self.config_called = False
 
     def get_system_status(self):
         self.status_called = True
@@ -43,6 +61,75 @@ class DummyOrchestrator:
 
     async def remove_strategy(self, sid):
         self.remove_id = sid
+
+    # Market data
+    def get_contracts(self):
+        self.contracts_called = True
+        return ["ES"]
+
+    def get_market_data(self, contract):
+        self.market_data_contract = contract
+        return {"contract": contract}
+
+    def get_bars(self, contract):
+        self.bars_contract = contract
+        return [{"time": 1}]
+
+    def get_quotes(self, contract):
+        self.quotes_contract = contract
+        return {"bid": 1}
+
+    # Account & positions
+    def get_positions(self):
+        self.positions_called = True
+        return [{"position": 1}]
+
+    def get_account(self):
+        self.account_called = True
+        return {"id": 1}
+
+    def get_trades(self):
+        self.trades_called = True
+        return [{"id": 1}]
+
+    def get_orders(self):
+        self.orders_called = True
+        return {"1": {"order_id": "1"}}
+
+    def get_order(self, order_id):
+        self.order_lookup = order_id
+        return {"order_id": order_id}
+
+    # Strategies
+    def list_strategies(self):
+        self.list_strat_called = True
+        return [{"id": "s1"}]
+
+    def list_available_strategies(self):
+        self.list_avail_called = True
+        return [{"id": "s1"}, {"id": "s2"}]
+
+    def get_strategy_performance(self, sid):
+        self.strategy_perf_id = sid
+        return {"id": sid, "pnl": 10}
+
+    def update_strategy(self, sid, cfg):
+        self.update_strategy_id = sid
+        self.update_strategy_cfg = cfg
+        return {"status": "updated"}
+
+    # System
+    def get_health(self):
+        self.health_called = True
+        return {"status": "good"}
+
+    def get_logs(self):
+        self.logs_called = True
+        return ["log"]
+
+    def get_config(self):
+        self.config_called = True
+        return {"debug": True}
 
 
 def test_rest_endpoints():
@@ -90,6 +177,76 @@ def test_rest_endpoints():
     assert resp.status_code == 200
     assert resp.json() == {"running": False}
     assert orch.strategy_runner.stats_called
+
+    # market data
+    resp = client.get("/contracts")
+    assert resp.status_code == 200
+    assert resp.json() == ["ES"]
+    assert orch.contracts_called
+
+    resp = client.get("/market-data/ES")
+    assert resp.json()["contract"] == "ES"
+    assert orch.market_data_contract == "ES"
+
+    resp = client.get("/bars/ES")
+    assert resp.json() == [{"time": 1}]
+    assert orch.bars_contract == "ES"
+
+    resp = client.get("/quotes/ES")
+    assert resp.json()["bid"] == 1
+    assert orch.quotes_contract == "ES"
+
+    # account & positions
+    resp = client.get("/positions")
+    assert resp.json() == [{"position": 1}]
+    assert orch.positions_called
+
+    resp = client.get("/account")
+    assert resp.json() == {"id": 1}
+    assert orch.account_called
+
+    resp = client.get("/trades")
+    assert resp.json() == [{"id": 1}]
+    assert orch.trades_called
+
+    resp = client.get("/orders")
+    assert resp.json() == {"1": {"order_id": "1"}}
+    assert orch.orders_called
+
+    resp = client.get("/orders/1")
+    assert resp.json() == {"order_id": "1"}
+    assert orch.order_lookup == "1"
+
+    # strategies
+    resp = client.get("/strategies")
+    assert resp.json() == [{"id": "s1"}]
+    assert orch.list_strat_called
+
+    resp = client.get("/strategies/available")
+    assert resp.json() == [{"id": "s1"}, {"id": "s2"}]
+    assert orch.list_avail_called
+
+    resp = client.get("/strategies/s1/performance")
+    assert resp.json() == {"id": "s1", "pnl": 10}
+    assert orch.strategy_perf_id == "s1"
+
+    resp = client.put("/strategies/s1", json={"p": 1})
+    assert resp.json() == {"status": "updated"}
+    assert orch.update_strategy_id == "s1"
+    assert orch.update_strategy_cfg == {"p": 1}
+
+    # system
+    resp = client.get("/health")
+    assert resp.json() == {"status": "good"}
+    assert orch.health_called
+
+    resp = client.get("/logs")
+    assert resp.json() == ["log"]
+    assert orch.logs_called
+
+    resp = client.get("/config")
+    assert resp.json() == {"debug": True}
+    assert orch.config_called
 
 
 def test_websocket_gateway():
