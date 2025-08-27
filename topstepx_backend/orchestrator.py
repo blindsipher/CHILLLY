@@ -17,6 +17,7 @@ from topstepx_backend.networking.market_hub_agent import MarketHubAgent
 from topstepx_backend.networking.user_hub_agent import UserHubAgent
 from topstepx_backend.networking.rate_limiter import RateLimiter
 from topstepx_backend.core.event_bus import EventBus
+from topstepx_backend.core.service import Service
 from topstepx_backend.core.topics import strategy_add, strategy_remove
 from topstepx_backend.core.clock import SystemClock
 from topstepx_backend.services.persistence import PersistenceService
@@ -130,25 +131,8 @@ class TopstepXOrchestrator:
         self._shutdown_event = asyncio.Event()
         self._health_check_task: Optional[asyncio.Task] = None
 
-        # Service startup order
-        self._startup_order = [
-            "rate_limiter",
-            "auth_manager",
-            "event_bus",
-            "clock",
-            "persistence",
-            "subscription_manager",
-            "timeframe_aggregator",
-            "market_subscription_service",
-            "historical_fetcher",
-            "polling_bar_service",
-            "series_cache_service",
-            "market_hub",
-            "user_hub",
-            "risk_manager",
-            "order_service",
-            "strategy_runner",
-        ]
+        # Track initialized services for startup/shutdown sequencing
+        self._services: list[Service] = []
 
         # Setup signal handlers for graceful shutdown
         self._setup_signal_handlers()
@@ -169,114 +153,51 @@ class TopstepXOrchestrator:
         self.logger.info("Initializing TopstepX backend services...")
 
         try:
-            # Initialize rate limiter
+            # Instantiate core components
             self.rate_limiter = RateLimiter()
             self.health_monitor.update_component_health("rate_limiter", "healthy")
 
-            # Initialize authentication
             self.auth_manager = AuthManager(self.config)
-            await self.auth_manager.start()
-            self.health_monitor.update_component_health("auth_manager", "healthy")
 
-            # Database handled by PersistenceService below
-
-            # Initialize event system
             if self.config.event_backend == "redis":
                 from topstepx_backend.core.redis_event_bus import RedisEventBus
 
                 self.event_bus = RedisEventBus(self.config.redis_url)
             else:
                 self.event_bus = EventBus(default_maxsize=5000)
-            await self.event_bus.start()
-            self.health_monitor.update_component_health("event_bus", "healthy")
 
-            # Initialize system clock
             self.clock = SystemClock(self.event_bus)
-            # Start the clock with base 1m and all timeframes used by TimeframeAggregator
-            # Supported timeframes: 5m, 10m, 15m, 20m, 25m, 30m, 45m, 1h, 4h, 1d
-            await self.clock.start({"1m", "5m", "10m", "15m", "20m", "25m", "30m", "45m", "1h", "4h", "1d"})
-            self.health_monitor.update_component_health("clock", "healthy")
-
-            # Initialize database service
             self.persistence = PersistenceService(
                 self.event_bus, self.config.database_path
             )
-            await self.persistence.start()
-            self.health_monitor.update_component_health("persistence", "healthy")
-
-            # Initialize subscription manager
             self.subscription_manager = SubscriptionManager(self.rate_limiter)
-            self.health_monitor.update_component_health(
-                "subscription_manager", "healthy"
+            self.timeframe_aggregator = TimeframeAggregator(
+                self.config, self.event_bus
             )
-
-            # Initialize timeframe aggregator
-            self.timeframe_aggregator = TimeframeAggregator(self.config, self.event_bus)
-            await self.timeframe_aggregator.start()
-            self.health_monitor.update_component_health(
-                "timeframe_aggregator", "healthy"
+            self.market_subscription_service = MarketSubscriptionService(
+                self.config, self.event_bus
             )
-            
-            # Initialize market subscription service
-            self.market_subscription_service = MarketSubscriptionService(self.config, self.event_bus)
-            await self.market_subscription_service.start()
-            self.health_monitor.update_component_health("market_subscription_service", "healthy")
-
-            # Initialize historical data fetcher
             self.historical_fetcher = HistoricalFetcher(
                 self.config, self.auth_manager, self.rate_limiter, self.event_bus
             )
-            await self.historical_fetcher.start()
-            self.health_monitor.update_component_health("historical_fetcher", "healthy")
-
-            # Initialize market data connection
-            self.market_hub = MarketHubAgent(self.config, self.auth_manager)
-            await self.market_hub.start()
-            self.health_monitor.update_component_health("market_hub", "healthy")
-
-            # Initialize polling bar service (replaces SignalR-based live bar builder)
-            # Integrated with MarketSubscriptionService for dynamic contract management
             self.polling_bar_service = PollingBarService(
-                self.config, 
-                self.auth_manager, 
-                self.rate_limiter, 
+                self.config,
+                self.auth_manager,
+                self.rate_limiter,
                 self.event_bus,
-                self.market_subscription_service
+                self.market_subscription_service,
             )
-            await self.polling_bar_service.start()
-            self.health_monitor.update_component_health("polling_bar_service", "healthy")
-
-            # Initialize series cache service for TradingView Lightweight Charts
             self.series_cache_service = SeriesCacheService(
-                self.config, 
-                self.event_bus,
-                max_bars_per_series=1000  # Configurable cache size
+                self.config, self.event_bus, max_bars_per_series=1000
             )
-            await self.series_cache_service.start()
-            self.health_monitor.update_component_health("series_cache_service", "healthy")
-
-            # Initialize user data connection
-            self.user_hub = UserHubAgent(self.config, self.auth_manager, self.event_bus)
-            await self.user_hub.start()
-            self.health_monitor.update_component_health("user_hub", "healthy")
-
-            # Register primary account and contracts with subscription manager
-            if self.subscription_manager:
-                self.subscription_manager.track_account(self.config.account_id)
-
-            # Initialize risk manager
+            self.market_hub = MarketHubAgent(self.config, self.auth_manager)
+            self.user_hub = UserHubAgent(
+                self.config, self.auth_manager, self.event_bus
+            )
             self.risk_manager = RiskManager(self.event_bus, self.config)
-            await self.risk_manager.start()
-            self.health_monitor.update_component_health("risk_manager", "healthy")
-
-            # Initialize order service
             self.order_service = OrderService(
                 self.event_bus, self.auth_manager, self.config, self.rate_limiter
             )
-            await self.order_service.start()
-            self.health_monitor.update_component_health("order_service", "healthy")
-
-            # Initialize strategy runner with dynamic strategy support
             registry = StrategyRegistry()
             self.strategy_runner = StrategyRunner(
                 self.event_bus,
@@ -286,8 +207,42 @@ class TopstepXOrchestrator:
                 risk_manager=self.risk_manager,
                 config=self.config,
             )
-            await self.strategy_runner.start()
-            self.health_monitor.update_component_health("strategy_runner", "healthy")
+
+            # Services in startup order
+            self._services = [
+                self.auth_manager,
+                self.event_bus,
+                self.clock,
+                self.persistence,
+                self.timeframe_aggregator,
+                self.market_subscription_service,
+                self.historical_fetcher,
+                self.polling_bar_service,
+                self.series_cache_service,
+                self.market_hub,
+                self.user_hub,
+                self.risk_manager,
+                self.order_service,
+                self.strategy_runner,
+            ]
+
+            for service in self._services:
+                name = service.__class__.__name__.lower()
+                if isinstance(service, SystemClock):
+                    await service.start(
+                        {"1m", "5m", "10m", "15m", "20m", "25m", "30m", "45m", "1h", "4h", "1d"}
+                    )
+                else:
+                    await service.start()
+                self.health_monitor.update_component_health(name, "healthy")
+
+            # Initialize subscription manager health after services start
+            self.health_monitor.update_component_health(
+                "subscription_manager", "healthy"
+            )
+
+            if self.subscription_manager:
+                self.subscription_manager.track_account(self.config.account_id)
 
             self.logger.info("All services initialized successfully")
 
@@ -339,21 +294,14 @@ class TopstepXOrchestrator:
                 pass
 
         # Shutdown services in reverse order
-        shutdown_order = list(reversed(self._startup_order))
-
-        for service_name in shutdown_order:
-            service = getattr(self, service_name, None)
-            if service:
-                try:
-                    self.logger.info("Stopping %s...", service_name)
-                    # Handle different stop methods (stop vs stop_async)
-                    if hasattr(service, "stop_async"):
-                        await service.stop_async()
-                    elif hasattr(service, "stop"):
-                        await service.stop()
-                    self.health_monitor.update_component_health(service_name, "stopped")
-                except Exception as e:
-                    self.logger.error("Error stopping %s: %s", service_name, e)
+        for service in reversed(self._services):
+            name = service.__class__.__name__.lower()
+            try:
+                self.logger.info("Stopping %s...", name)
+                await service.stop()
+                self.health_monitor.update_component_health(name, "stopped")
+            except Exception as e:
+                self.logger.error("Error stopping %s: %s", name, e)
 
         self.logger.info("TopstepX backend orchestrator shutdown complete")
 
@@ -455,7 +403,7 @@ class TopstepXOrchestrator:
 
         # Check polling bar service
         if self.polling_bar_service:
-            stats = self.polling_bar_service.get_stats()
+            stats = self.polling_bar_service.get_metrics()
             health_status = self.polling_bar_service.get_health_status()
             status = "healthy" if health_status.get("status") == "healthy" else "error"
             self.health_monitor.update_component_health(
@@ -503,7 +451,7 @@ class TopstepXOrchestrator:
             status["series_cache_service"] = self.series_cache_service.get_stats()
 
         if self.polling_bar_service:
-            status["polling_bar_service"] = self.polling_bar_service.get_stats()
+            status["polling_bar_service"] = self.polling_bar_service.get_metrics()
 
         if self.timeframe_aggregator:
             status["timeframe_aggregator"] = self.timeframe_aggregator.get_stats()

@@ -10,14 +10,20 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, Any, List, TYPE_CHECKING
 from dataclasses import dataclass
 
-from topstepx_backend.config.settings import TopstepConfig
-from topstepx_backend.data.types import Bar
-from topstepx_backend.core.event_bus import EventBus
-from topstepx_backend.core.topics import market_bar, persist_bar_save
-from topstepx_backend.auth.auth_manager import AuthManager
-from topstepx_backend.networking.rate_limiter import RateLimiter
-from topstepx_backend.networking.api_helpers import auth_headers, utc_now, format_iso_utc
 import aiohttp
+
+from topstepx_backend.auth.auth_manager import AuthManager
+from topstepx_backend.config.settings import TopstepConfig
+from topstepx_backend.core.event_bus import EventBus
+from topstepx_backend.core.service import Service
+from topstepx_backend.core.topics import market_bar, persist_bar_save
+from topstepx_backend.data.types import Bar
+from topstepx_backend.networking.api_helpers import (
+    auth_headers,
+    format_iso_utc,
+    utc_now,
+)
+from topstepx_backend.networking.rate_limiter import RateLimiter
 
 if TYPE_CHECKING:
     from topstepx_backend.services.market_subscription_service import MarketSubscriptionService
@@ -32,7 +38,7 @@ class MarketSubscription:
     poll_failures: int = 0
 
 
-class PollingBarService:
+class PollingBarService(Service):
     """
     30-second polling service for finalized and partial 1-minute bars.
     
@@ -54,6 +60,7 @@ class PollingBarService:
         market_subscription_service: Optional['MarketSubscriptionService'] = None,
         initial_subscriptions: Optional[List[str]] = None,
     ):
+        super().__init__()
         self.config = config
         self.auth_manager = auth_manager
         self.rate_limiter = rate_limiter
@@ -73,13 +80,12 @@ class PollingBarService:
         self._event_tasks = []
 
         # Service state
-        self._running = False
         self._session: Optional[aiohttp.ClientSession] = None
         self._polling_task: Optional[asyncio.Task] = None
         self._poll_interval = 30.0  # 30 seconds
 
         # Performance metrics
-        self._stats = {
+        self._metrics = {
             "polls_completed": 0,
             "bars_published": 0,
             "partial_bars_published": 0,
@@ -88,7 +94,7 @@ class PollingBarService:
             "subscribed_markets": 0,
             "active_markets": 0,
         }
-        self._stats_lock = asyncio.Lock()
+        self._metrics_lock = asyncio.Lock()
 
         # Error handling
         self._max_consecutive_failures = 3
@@ -117,9 +123,9 @@ class PollingBarService:
         # Start polling task
         self._polling_task = asyncio.create_task(self._polling_loop())
 
-        async with self._stats_lock:
-            self._stats["subscribed_markets"] = len(self._subscriptions)
-            self._stats["active_markets"] = len([s for s in self._subscriptions.values() if s.enabled])
+        async with self._metrics_lock:
+            self._metrics["subscribed_markets"] = len(self._subscriptions)
+            self._metrics["active_markets"] = len([s for s in self._subscriptions.values() if s.enabled])
 
         self.logger.info(
             f"PollingBarService started with {len(self._subscriptions)} subscribed markets, "
@@ -173,9 +179,9 @@ class PollingBarService:
                 await self._poll_all_markets()
                 
                 # Update success metrics
-                async with self._stats_lock:
-                    self._stats["polls_completed"] += 1
-                    self._stats["last_poll_time"] = start_time
+                async with self._metrics_lock:
+                    self._metrics["polls_completed"] += 1
+                    self._metrics["last_poll_time"] = start_time
 
                 # Reset failure tracking on success
                 consecutive_failures = 0
@@ -198,8 +204,8 @@ class PollingBarService:
                 break
             except Exception as e:
                 consecutive_failures += 1
-                async with self._stats_lock:
-                    self._stats["poll_errors"] += 1
+                async with self._metrics_lock:
+                    self._metrics["poll_errors"] += 1
 
                 self.logger.error(
                     f"Polling error (attempt {consecutive_failures}): {e}"
@@ -365,8 +371,8 @@ class PollingBarService:
                 topic = f"{market_bar(bar.contract_id, bar.timeframe)}_partial"
                 await self.event_bus.publish(topic, bar.to_dict())
                 
-                async with self._stats_lock:
-                    self._stats["partial_bars_published"] += 1
+                async with self._metrics_lock:
+                    self._metrics["partial_bars_published"] += 1
 
                 self.logger.debug(f"Published partial {bar.timeframe} bar for {bar.contract_id}")
             else:
@@ -378,8 +384,8 @@ class PollingBarService:
                 # 2. Infrastructure command for PersistenceService
                 await self.event_bus.publish(persist_bar_save(), bar.to_dict())
 
-                async with self._stats_lock:
-                    self._stats["bars_published"] += 1
+                async with self._metrics_lock:
+                    self._metrics["bars_published"] += 1
 
                 self.logger.debug(f"Published finalized {bar.timeframe} bar for {bar.contract_id}")
 
@@ -400,9 +406,9 @@ class PollingBarService:
             self._subscriptions[contract_id] = MarketSubscription(contract_id=contract_id)
             self.logger.info(f"Added new subscription for {contract_id}")
 
-        async with self._stats_lock:
-            self._stats["subscribed_markets"] = len(self._subscriptions)
-            self._stats["active_markets"] = len([s for s in self._subscriptions.values() if s.enabled])
+        async with self._metrics_lock:
+            self._metrics["subscribed_markets"] = len(self._subscriptions)
+            self._metrics["active_markets"] = len([s for s in self._subscriptions.values() if s.enabled])
 
         return True
 
@@ -411,9 +417,9 @@ class PollingBarService:
         if contract_id in self._subscriptions:
             del self._subscriptions[contract_id]
             
-            async with self._stats_lock:
-                self._stats["subscribed_markets"] = len(self._subscriptions)
-                self._stats["active_markets"] = len([s for s in self._subscriptions.values() if s.enabled])
+            async with self._metrics_lock:
+                self._metrics["subscribed_markets"] = len(self._subscriptions)
+                self._metrics["active_markets"] = len([s for s in self._subscriptions.values() if s.enabled])
                 
             self.logger.info(f"Unsubscribed from {contract_id}")
             return True
@@ -430,25 +436,30 @@ class PollingBarService:
             if sub.enabled
         ]
 
-    def get_stats(self) -> Dict[str, Any]:
-        """Get service statistics."""
-        stats = self._stats.copy()
-        stats.update({
-            "running": self._running,
-            "poll_interval_seconds": self._poll_interval,
-            "total_subscriptions": len(self._subscriptions),
-            "disabled_subscriptions": len([s for s in self._subscriptions.values() if not s.enabled]),
-            "avg_bars_per_poll": (
-                stats["bars_published"] / max(stats["polls_completed"], 1)
-            ),
-        })
-        return stats
+    def get_metrics(self) -> Dict[str, Any]:
+        """Get service metrics."""
+        metrics = self._metrics.copy()
+        metrics.update(
+            {
+                "running": self._running,
+                "poll_interval_seconds": self._poll_interval,
+                "total_subscriptions": len(self._subscriptions),
+                "disabled_subscriptions": len(
+                    [s for s in self._subscriptions.values() if not s.enabled]
+                ),
+                "avg_bars_per_poll": (
+                    metrics["bars_published"] / max(metrics["polls_completed"], 1)
+                ),
+            }
+        )
+        return metrics
 
     def get_health_status(self) -> Dict[str, Any]:
         """Get health status for system monitoring."""
         recent_poll = (
-            self._stats["last_poll_time"] and 
-            (utc_now() - self._stats["last_poll_time"]).total_seconds() < (self._poll_interval * 2)
+            self._metrics["last_poll_time"]
+            and (utc_now() - self._metrics["last_poll_time"]).total_seconds()
+            < (self._poll_interval * 2)
         )
         
         return {
