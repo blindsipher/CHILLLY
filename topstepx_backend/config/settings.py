@@ -23,6 +23,10 @@ class TopstepConfig:
     environment: str
     live_mode: bool = True  # Live mode by default
     default_contracts: List[str] = field(default_factory=list)  # Initial contract subscriptions
+    # Event system
+    event_backend: str = "memory"  # memory|redis
+    redis_url: str = "redis://localhost:6379/0"
+    use_uvloop: bool = False
 
     @classmethod
     def from_env(cls, env_file: Optional[str] = None) -> "TopstepConfig":
@@ -56,6 +60,9 @@ class TopstepConfig:
                 for c in os.getenv("DEFAULT_CONTRACTS", "").split(",")
                 if c.strip()
             ],
+            event_backend=os.getenv("EVENT_BACKEND", "memory"),
+            redis_url=os.getenv("REDIS_URL", "redis://localhost:6379/0"),
+            use_uvloop=os.getenv("USE_UVLOOP", "false").lower() == "true",
         )
 
     def validate(self) -> bool:
@@ -113,6 +120,15 @@ class TopstepConfig:
             raise ValueError(
                 f"Invalid environment: {self.environment}. Must be one of {valid_environments}"
             )
+
+        # Validate event backend choice
+        valid_backends = ["memory", "redis"]
+        if self.event_backend not in valid_backends:
+            raise ValueError(
+                f"Invalid event_backend: {self.event_backend}. Must be one of {valid_backends}"
+            )
+        if self.event_backend == "redis" and not self.redis_url:
+            raise ValueError("redis_url must be provided when using Redis event backend")
 
         return True
 

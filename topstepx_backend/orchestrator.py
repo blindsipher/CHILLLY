@@ -86,6 +86,14 @@ class TopstepXOrchestrator:
     def __init__(self, config: Optional[TopstepConfig] = None):
         self.config = config or get_config()
         self.logger = logging.getLogger(__name__)
+        if self.config.use_uvloop:
+            try:
+                import uvloop
+
+                asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+                self.logger.info("uvloop enabled")
+            except ImportError:  # pragma: no cover - optional dependency
+                self.logger.warning("uvloop requested but not installed")
 
         # Core services
         self.auth_manager: Optional[AuthManager] = None
@@ -170,7 +178,12 @@ class TopstepXOrchestrator:
             # Database handled by PersistenceService below
 
             # Initialize event system
-            self.event_bus = EventBus(default_maxsize=5000)
+            if self.config.event_backend == "redis":
+                from topstepx_backend.core.redis_event_bus import RedisEventBus
+
+                self.event_bus = RedisEventBus(self.config.redis_url)
+            else:
+                self.event_bus = EventBus(default_maxsize=5000)
             await self.event_bus.start()
             self.health_monitor.update_component_health("event_bus", "healthy")
 
