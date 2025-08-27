@@ -1,4 +1,7 @@
-"""Simple benchmarking script for the in-memory EventBus."""
+"""Simple benchmarking script for the in-memory EventBus.
+
+Run with: ``python benchmarks/event_bus_benchmark.py``.
+"""
 
 import asyncio
 import statistics
