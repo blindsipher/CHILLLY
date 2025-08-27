@@ -100,6 +100,8 @@ class TopstepXOrchestrator:
         self.polling_bar_service: Optional[PollingBarService] = None
         self.historical_fetcher: Optional[HistoricalFetcher] = None
         self.timeframe_aggregator: Optional[TimeframeAggregator] = None
+        # Coordinates dynamic market data subscriptions
+        self.market_subscription_service: Optional[MarketSubscriptionService] = None
         self.series_cache_service: Optional[SeriesCacheService] = None
 
         # Network services
