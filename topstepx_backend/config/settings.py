@@ -1,7 +1,7 @@
 import os
 import re
-from typing import Optional
-from dataclasses import dataclass
+from typing import Optional, List
+from dataclasses import dataclass, field
 from dotenv import load_dotenv
 from urllib.parse import urlparse
 
@@ -27,6 +27,7 @@ class TopstepConfig:
     log_level: str
     environment: str
     live_mode: bool = True  # Live mode by default
+    default_contracts: List[str] = field(default_factory=list)  # Initial contract subscriptions
 
     @classmethod
     def from_env(cls, env_file: Optional[str] = None) -> "TopstepConfig":
@@ -66,6 +67,11 @@ class TopstepConfig:
             log_level=os.getenv("LOG_LEVEL", "INFO"),
             environment=os.getenv("ENVIRONMENT", "development"),
             live_mode=os.getenv("LIVE_MODE", "true").lower() == "true",
+            default_contracts=[
+                c.strip()
+                for c in os.getenv("DEFAULT_CONTRACTS", "").split(",")
+                if c.strip()
+            ],
         )
 
     def validate(self) -> bool:
