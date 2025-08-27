@@ -75,6 +75,8 @@ The orchestrator starts all services and strategy runner:
 python -m topstepx_backend.orchestrator
 ```
 
+The FastAPI server exposes REST and WebSocket endpoints (such as `/status`, `/metrics`, and `/auth/token`) that a future frontend can consume for interaction and monitoring.
+
 ## Writing Strategies
 Strategies reside in `topstepx_backend/strategy`. To build your own algorithm:
 
