@@ -64,9 +64,10 @@ class AggregationState:
 
 
 class TimeframeAggregator:
-    """Aggregates 1-minute bars into higher timeframes (5m, 10m, 15m, 20m, 25m, 30m, 45m, 1h, 4h, 1d)."""
+    """Aggregates 1-minute bars into higher timeframes: 5m, 10m, 15m, 20m, 25m, 30m, 45m, 1h, 4h, 1d."""
 
-    # Supported timeframes with their minute intervals
+    # Supported timeframes with their minute intervals. Must match SystemClock configuration
+    # in the orchestrator to ensure boundary events are emitted for each timeframe.
     SUPPORTED_TIMEFRAMES = {
         "5m": 5,
         "10m": 10,

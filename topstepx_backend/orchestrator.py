@@ -173,7 +173,9 @@ class TopstepXOrchestrator:
 
             # Initialize system clock
             self.clock = SystemClock(self.event_bus)
-            await self.clock.start({"1m", "5m", "15m", "30m", "1h", "4h", "1d"})
+            # Start the clock with base 1m and all timeframes used by TimeframeAggregator
+            # Supported timeframes: 5m, 10m, 15m, 20m, 25m, 30m, 45m, 1h, 4h, 1d
+            await self.clock.start({"1m", "5m", "10m", "15m", "20m", "25m", "30m", "45m", "1h", "4h", "1d"})
             self.health_monitor.update_component_health("clock", "healthy")
 
             # Initialize database service
