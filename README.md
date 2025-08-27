@@ -97,3 +97,7 @@ Run the unit tests with pytest:
 ```
 pytest
 ```
+
+## Manual API/WebSocket Testing
+A barebones HTML dashboard is available at `docs/test_dashboard.html` to exercise the REST endpoints and WebSocket streams. Open the file in a browser and adjust the base URL/token fields to match your running backend.
+
