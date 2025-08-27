@@ -26,10 +26,29 @@ aiohttp_stub = types.SimpleNamespace(
 sys.modules.setdefault("aiohttp", aiohttp_stub)
 sys.modules.setdefault("dotenv", types.SimpleNamespace(load_dotenv=lambda *a, **k: None))
 sys.modules.setdefault("yaml", types.SimpleNamespace(safe_load=lambda *a, **k: {}))
-sys.modules.setdefault("pydantic", types.SimpleNamespace(BaseSettings=object, Field=lambda *a, **k: None))
+# Minimal Pydantic BaseModel stub
+class _BaseModel:
+    def __init__(self, **data):
+        for k, v in data.items():
+            setattr(self, k, v)
+
+    def dict(self):  # pragma: no cover - simple stub
+        return dict(self.__dict__)
+
+
+sys.modules.setdefault(
+    "pydantic",
+    types.SimpleNamespace(
+        BaseSettings=object, BaseModel=_BaseModel, Field=lambda *a, **k: None
+    ),
+)
 pysignalr_client = types.SimpleNamespace(SignalRClient=object)
 sys.modules.setdefault("pysignalr", types.SimpleNamespace(client=pysignalr_client))
 sys.modules.setdefault("pysignalr.client", pysignalr_client)
+sys.modules.setdefault(
+    "uvicorn",
+    types.SimpleNamespace(Config=object, Server=object),
+)
 
 # Minimal FastAPI stub
 import re, inspect, asyncio
