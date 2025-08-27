@@ -1,4 +1,4 @@
-from typing import Optional, Callable, List, TYPE_CHECKING
+from typing import Optional, Callable, List, TYPE_CHECKING, Dict
 from dataclasses import dataclass
 
 from topstepx_backend.networking.hub_agent import HubAgent
@@ -80,9 +80,16 @@ class UserHubAgent(HubAgent):
         config: TopstepConfig,
         auth_manager: AuthManager,
         event_bus: Optional["EventBus"] = None,
+        order_tag_map: Optional[Dict[int, str]] = None,
     ):
         super().__init__(config, auth_manager, "user")
         self.event_bus = event_bus
+
+        # Order correlation map: order_id -> custom_tag
+        # This can be shared with OrderService for cross-component correlation
+        self.order_tag_map: Dict[int, str] = (
+            order_tag_map if order_tag_map is not None else {}
+        )
 
         # Data handlers
         self.account_handlers: List[Callable[[UserAccountData], None]] = []
@@ -211,6 +218,10 @@ class UserHubAgent(HubAgent):
                 custom_tag=data.get("customTag"),
             )
 
+            # Track custom tags for correlation with fills
+            if order.custom_tag:
+                self.order_tag_map[order.id] = order.custom_tag
+
             self.logger.debug(
                 f"Order update: {order.id} - Status: {order.status}, Size: {order.size}"
             )
@@ -305,7 +316,7 @@ class UserHubAgent(HubAgent):
                 # Convert to order fill event
                 fill_event = {
                     "order_id": trade.order_id,
-                    "custom_tag": f"fill_{trade.id}",  # TODO: Get actual custom_tag from order correlation
+                    "custom_tag": self.order_tag_map.get(trade.order_id),
                     "price": trade.price,
                     "size": trade.size,
                     "fees": trade.fees,
