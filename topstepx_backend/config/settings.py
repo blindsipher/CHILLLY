@@ -18,11 +18,6 @@ class TopstepConfig:
     projectx_base_url: str
     projectx_user_hub_url: str
     projectx_market_hub_url: str
-    # Note: UserAPI is not used in this system - ProjectX Gateway API is used for all trading operations
-    # Legacy fields for backward compatibility
-    base_url: str
-    user_hub_url: str
-    market_hub_url: str
     database_path: str
     log_level: str
     environment: str
@@ -51,17 +46,6 @@ class TopstepConfig:
             ),
             projectx_market_hub_url=os.getenv(
                 "PROJECTX_MARKET_HUB_URL", "https://rtc.topstepx.com/hubs/market"
-            ),
-            # Note: UserAPI is not used - ProjectX Gateway API handles all operations
-            # Legacy fields for backward compatibility
-            base_url=os.getenv(
-                "TOPSTEP_BASE_URL", "https://api.topstepx.com"
-            ),  # Default to ProjectX
-            user_hub_url=os.getenv(
-                "TOPSTEP_USER_HUB_URL", "https://rtc.topstepx.com/hubs/user"
-            ),
-            market_hub_url=os.getenv(
-                "TOPSTEP_MARKET_HUB_URL", "https://rtc.topstepx.com/hubs/market"
             ),
             database_path=os.getenv("DATABASE_PATH", "data/topstepx.db"),
             log_level=os.getenv("LOG_LEVEL", "INFO"),
