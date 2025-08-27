@@ -2,6 +2,7 @@ import asyncio
 
 import pytest
 from fastapi.testclient import TestClient
+from unittest.mock import MagicMock
 
 from topstepx_backend.api.server import APIServer, StatusResponse, StrategyResponse
 from topstepx_backend.core.event_bus import EventBus
@@ -20,6 +21,7 @@ class DummyOrchestrator:
         self.submit_payload = None
         self.add_payload = None
         self.remove_id = None
+        self.metrics_payload = {}
 
     def get_system_status(self):
         self.status_called = True
@@ -33,6 +35,9 @@ class DummyOrchestrator:
 
     async def remove_strategy(self, sid):
         self.remove_id = sid
+
+    def analytics(self):
+        return self.metrics_payload
 
 
 def test_rest_endpoints():
@@ -74,6 +79,19 @@ def test_rest_endpoints():
     data = StrategyResponse(**resp.json())
     assert data.status == "removed"
     assert orch.remove_id == "abc"
+
+
+def test_metrics_endpoint():
+    orch = DummyOrchestrator()
+    metrics = {"orders_processed": 5, "active_strategies": 2}
+    orch.analytics = MagicMock(return_value=metrics)
+    server = APIServer(orch)
+    client = TestClient(server.app)
+
+    resp = client.get("/metrics")
+    assert resp.status_code == 200
+    assert resp.json() == metrics
+    orch.analytics.assert_called_once()
 
 
 def test_websocket_gateway():
