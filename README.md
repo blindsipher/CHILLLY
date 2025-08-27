@@ -11,7 +11,8 @@ friction.
 Independent services communicate exclusively via events:
 
 - **EventBus** – topic-based routing layer with backpressure that decouples
-  producers and consumers.
+  producers and consumers. Backends are pluggable, with in-memory and Redis
+  implementations available.
 - **SystemClock** – deterministic clock publishing UTC-aligned minute boundaries
   to drive bar creation.
 - **PollingBarService** – polls the TopstepX History API every 30 seconds,
@@ -33,7 +34,8 @@ Independent services communicate exclusively via events:
 
 ### Program Flow
 1. The orchestrator loads configuration from environment variables,
-   authenticates with TopstepX, and starts the core services.
+   optionally installs `uvloop` for faster asyncio scheduling, authenticates
+   with TopstepX, and starts the core services.
 2. Market data flows from `PollingBarService` into the `EventBus`; aggregators,
    persistence, caches, and strategies consume the events.
 3. Strategies can submit orders by publishing to order topics. `OrderService`
