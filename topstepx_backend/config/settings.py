@@ -34,6 +34,9 @@ class TopstepConfig:
     event_backend: str = "memory"  # memory|redis
     redis_url: str = "redis://localhost:6379/0"
     use_uvloop: bool = False
+    # Caching
+    cache_backend: str = "memory"  # memory|redis
+    cache_ttl: int = 3600  # seconds
     # Global risk thresholds
     risk_max_position_size: int = 5
     risk_max_daily_loss: float = 1000.0
@@ -75,6 +78,8 @@ class TopstepConfig:
             event_backend=os.getenv("EVENT_BACKEND", "memory"),
             redis_url=os.getenv("REDIS_URL", "redis://localhost:6379/0"),
             use_uvloop=os.getenv("USE_UVLOOP", "false").lower() == "true",
+            cache_backend=os.getenv("CACHE_BACKEND", "memory"),
+            cache_ttl=int(os.getenv("CACHE_TTL", "3600")),
             risk_max_position_size=int(
                 os.getenv("RISK_MAX_POSITION_SIZE", "5")
             ),
@@ -151,6 +156,13 @@ class TopstepConfig:
             )
         if self.event_backend == "redis" and not self.redis_url:
             raise ValueError("redis_url must be provided when using Redis event backend")
+
+        if self.cache_backend not in valid_backends:
+            raise ValueError(
+                f"Invalid cache_backend: {self.cache_backend}. Must be one of {valid_backends}"
+            )
+        if self.cache_backend == "redis" and not self.redis_url:
+            raise ValueError("redis_url must be provided when using Redis cache backend")
 
         return True
 

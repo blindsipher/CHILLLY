@@ -7,6 +7,11 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional, List, Dict, Any
 from dataclasses import dataclass
 
+try:
+    from aiocache import Cache
+except Exception:  # pragma: no cover - aiocache may not be installed
+    Cache = None
+
 from topstepx_backend.config.settings import TopstepConfig
 from topstepx_backend.auth.auth_manager import AuthManager
 from topstepx_backend.networking.rate_limiter import RateLimiter
@@ -46,6 +51,17 @@ class HistoricalFetcher:
 
         # HTTP session for reuse
         self._session: Optional[aiohttp.ClientSession] = None
+
+        # Cache setup (in-memory by default, optional Redis)
+        if Cache and config.cache_backend == "redis":
+            self._cache = Cache.from_url(config.redis_url)
+            self._cache_is_async = True
+        elif Cache:
+            self._cache = Cache(Cache.MEMORY)
+            self._cache_is_async = True
+        else:  # Fallback simple dict cache
+            self._cache = {}
+            self._cache_is_async = False
 
         # Request queue for data collection
         self._request_queue: asyncio.Queue = asyncio.Queue(maxsize=1000)
@@ -259,6 +275,21 @@ class HistoricalFetcher:
         )
         return chunks
 
+    def _cache_key(self, request: HistoricalRequest) -> str:
+        """Generate cache key for a request."""
+        return f"{request.contract_id}:{request.timeframe}:{request.start_date.date().isoformat()}"
+
+    async def _cache_get(self, key: str):
+        if self._cache_is_async:
+            return await self._cache.get(key)
+        return self._cache.get(key)
+
+    async def _cache_set(self, key: str, value: Any):
+        if self._cache_is_async:
+            await self._cache.set(key, value, ttl=self.config.cache_ttl)
+        else:
+            self._cache[key] = value
+
     async def _fetch_single_chunk(self, request: HistoricalRequest) -> bool:
         """Fetch a single chunk of historical data."""
         # Ensure session is available
@@ -271,6 +302,17 @@ class HistoricalFetcher:
             )
 
         try:
+            cache_key = self._cache_key(request)
+            cached = await self._cache_get(cache_key)
+            if cached:
+                bars_published = await self._process_api_response(
+                    request.contract_id, request.timeframe, cached
+                )
+                self._stats["bars_fetched"] += bars_published
+                self._stats["bars_published"] += bars_published
+                self.logger.debug(f"Cache hit for {cache_key}")
+                return True
+
             # Wait for rate limit availability - use correct endpoint
             await self._rate_limiter.acquire(self._HISTORY_ENDPOINT)
 
@@ -323,6 +365,7 @@ class HistoricalFetcher:
 
                     self._stats["bars_fetched"] += bars_published
                     self._stats["bars_published"] += bars_published
+                    await self._cache_set(cache_key, data)
                     self.logger.debug(
                         f"Fetched and published {bars_published} bars for {request.contract_id} chunk"
                     )
