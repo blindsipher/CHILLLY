@@ -65,6 +65,8 @@ class EventBus:
     def __init__(self, *, default_maxsize: int = 1024, worker_concurrency: int = 4):
         self.logger = logging.getLogger(__name__)
         self._subs: List[Subscription] = []
+        self._subs_by_topic: dict[str, list[Subscription]] = {}
+        self._wildcard_subs: list[Subscription] = []
         self._topic_fifo: Dict[str, asyncio.Queue] = {}  # topic -> asyncio.Queue
         self._default_maxsize = default_maxsize
         self._lock = asyncio.Lock()
@@ -84,7 +86,6 @@ class EventBus:
             "backpressure_blocks": 0,
             "subscriber_count": 0,
             "avg_fanout_time_ms": 0.0,
-            "avg_fanout_time_ms_fnmatch": 0.0,
             "avg_worker_lag_ms": 0.0,
             "max_queue_depth": 0,
             "avg_regex_compile_time_ms": 0.0,
@@ -114,6 +115,11 @@ class EventBus:
 
         async with self._lock:
             self._subs.append(sub)
+            if any(ch in pattern for ch in "*?["):
+                self._wildcard_subs.append(sub)
+            else:
+                self._subs_by_topic.setdefault(pattern, []).append(sub)
+
             async with self._metrics_lock:
                 self._metrics["subscriber_count"] = len(self._subs)
                 count = self._metrics["regex_compilations"] + 1
@@ -133,6 +139,16 @@ class EventBus:
         async with self._lock:
             if sub in self._subs:
                 self._subs.remove(sub)
+                if any(ch in sub.pattern for ch in "*?["):
+                    with suppress(ValueError):
+                        self._wildcard_subs.remove(sub)
+                else:
+                    lst = self._subs_by_topic.get(sub.pattern)
+                    if lst:
+                        with suppress(ValueError):
+                            lst.remove(sub)
+                        if not lst:
+                            del self._subs_by_topic[sub.pattern]
                 sub.close()
                 async with self._metrics_lock:
                     self._metrics["subscriber_count"] = len(self._subs)
@@ -193,33 +209,25 @@ class EventBus:
             q = self._topic_fifo[topic]
             events_processed = 0
             total_lag_ms = 0.0
-            match_time_regex = 0.0
-            match_time_fnmatch = 0.0
 
             async with self._lock:
-                current_subs = list(self._subs)
+                exact_subs = list(self._subs_by_topic.get(topic, []))
+                wildcard_subs = list(self._wildcard_subs)
 
             while not q.empty():
                 evt = await q.get()
                 events_processed += 1
                 total_lag_ms += (time.time() - evt.ts) * 1000
 
-                match_start = time.perf_counter()
-                matched = [sub for sub in current_subs if sub.regex.match(evt.topic)]
-                match_time_regex += time.perf_counter() - match_start
-
-                for sub in matched:
+                for sub in exact_subs:
                     await self._deliver(sub, evt)
 
-                fnmatch_start = time.perf_counter()
-                for sub in current_subs:
-                    fnmatch.fnmatch(evt.topic, sub.pattern)
-                match_time_fnmatch += time.perf_counter() - fnmatch_start
+                if wildcard_subs:
+                    for sub in wildcard_subs:
+                        if sub.regex.match(evt.topic):
+                            await self._deliver(sub, evt)
 
-            fanout_total = time.perf_counter() - start_time
-            fanout_time_ms = fanout_total * 1000
-            deliver_time = fanout_total - match_time_regex
-            fanout_time_fnmatch_ms = (deliver_time + match_time_fnmatch) * 1000
+            fanout_time_ms = (time.perf_counter() - start_time) * 1000
 
             async with self._metrics_lock:
                 self._metrics["events_processed"] += events_processed
@@ -228,11 +236,6 @@ class EventBus:
                 current_avg = self._metrics["avg_fanout_time_ms"]
                 self._metrics["avg_fanout_time_ms"] = (
                     current_avg * (count - events_processed) + fanout_time_ms
-                ) / count
-                current_avg_fnmatch = self._metrics["avg_fanout_time_ms_fnmatch"]
-                self._metrics["avg_fanout_time_ms_fnmatch"] = (
-                    current_avg_fnmatch * (count - events_processed)
-                    + fanout_time_fnmatch_ms
                 ) / count
                 current_lag = self._metrics["avg_worker_lag_ms"]
                 self._metrics["avg_worker_lag_ms"] = (
