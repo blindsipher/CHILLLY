@@ -104,6 +104,26 @@ class AuthManager:
         token = self.get_token()
         return {"Authorization": f"Bearer {token}"}
 
+    def validate_credentials(self, username: str, api_key: str) -> str:
+        """Validate provided credentials and return the current token.
+
+        Args:
+            username: Username to validate.
+            api_key: API key to validate.
+
+        Returns:
+            The current authentication token if credentials are valid.
+
+        Raises:
+            AuthenticationError: If the credentials do not match the configured ones
+                or no token is available.
+        """
+
+        if username != self.config.username or api_key != self.config.api_key:
+            raise AuthenticationError("Invalid credentials")
+
+        return self.get_token()
+
     async def _authenticate(self):
         """Authenticate with TopstepX API and get JWT token."""
         if not self._session:

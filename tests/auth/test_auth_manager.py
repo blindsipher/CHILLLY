@@ -27,9 +27,116 @@ aiohttp_stub = types.SimpleNamespace(
 )
 sys.modules.setdefault("aiohttp", aiohttp_stub)
 sys.modules.setdefault("dotenv", types.SimpleNamespace(load_dotenv=lambda *a, **k: None))
+sys.modules.setdefault("uvicorn", types.SimpleNamespace(Config=object, Server=object))
 
-from topstepx_backend.auth.auth_manager import AuthManager, AuthToken
+# Minimal pydantic stub
+class _BaseModel:
+    def __init__(self, **data):
+        for k, v in data.items():
+            setattr(self, k, v)
+
+    def dict(self):
+        return self.__dict__
+
+
+class _BaseSettings:
+    pass
+
+
+def _Field(default=None, default_factory=None):
+    if default_factory is not None:
+        return default_factory()
+    return default
+
+
+pydantic_stub = types.ModuleType("pydantic")
+pydantic_stub.BaseModel = _BaseModel
+pydantic_stub.BaseSettings = _BaseSettings
+pydantic_stub.Field = _Field
+sys.modules["pydantic"] = pydantic_stub
+
+# Minimal FastAPI stub
+class _FastAPI:
+    def __init__(self):
+        self.routes = {}
+
+    def _register(self, method, path):
+        def decorator(func):
+            self.routes[(method, path)] = func
+            return func
+        return decorator
+
+    def get(self, path, response_model=None):
+        return self._register("GET", path)
+
+    def post(self, path, response_model=None):
+        return self._register("POST", path)
+
+    def delete(self, path, response_model=None):
+        return self._register("DELETE", path)
+
+    def websocket(self, path):
+        return self._register("WS", path)
+
+
+class _HTTPException(Exception):
+    def __init__(self, status_code: int, detail: str):
+        self.status_code = status_code
+        self.detail = detail
+
+
+class _WebSocket:  # pragma: no cover - minimal stub
+    pass
+
+
+class _WebSocketDisconnect(Exception):  # pragma: no cover - minimal stub
+    pass
+
+
+class _Response:
+    def __init__(self, status_code: int, json_data=None):
+        self.status_code = status_code
+        self._json = json_data or {}
+
+    def json(self):
+        return self._json
+
+
+class _TestClient:
+    __test__ = False
+    def __init__(self, app):
+        self.app = app
+
+    def post(self, path, json=None):
+        from topstepx_backend.api.server import TokenRequest, HTTPException as _HTTPExc
+
+        func = self.app.routes.get(("POST", path))
+        try:
+            result = asyncio.run(func(TokenRequest(**(json or {}))))
+            return _Response(200, result.dict())
+        except _HTTPExc as exc:
+            return _Response(exc.status_code, {"detail": exc.detail})
+
+
+fastapi_stub = types.SimpleNamespace(
+    FastAPI=_FastAPI,
+    WebSocket=_WebSocket,
+    WebSocketDisconnect=_WebSocketDisconnect,
+    HTTPException=_HTTPException,
+)
+testclient_stub = types.SimpleNamespace(TestClient=_TestClient)
+sys.modules.setdefault("fastapi", fastapi_stub)
+sys.modules.setdefault("fastapi.testclient", testclient_stub)
+
+from topstepx_backend.auth.auth_manager import (
+    AuthManager,
+    AuthToken,
+    AuthenticationError,
+)
 from topstepx_backend.config.settings import TopstepConfig
+from topstepx_backend.api.server import APIServer
+from topstepx_backend.core.event_bus import EventBus
+from fastapi.testclient import TestClient
 
 
 class MockResponse:
@@ -140,3 +247,52 @@ def test_refresh_loop_reauth_on_validation_failure(dummy_config):
         with patch("asyncio.sleep", side_effect=asyncio.CancelledError):
             asyncio.run(auth._token_refresh_loop())
     assert auth.get_token() == "reauthed"
+
+
+def test_validate_credentials(dummy_config):
+    responses = {
+        login_url(dummy_config): [MockResponse(200, {"success": True, "token": "init"})]
+    }
+    session = MockSession(responses)
+    with patch("aiohttp.ClientSession", return_value=session):
+        auth = AuthManager(dummy_config)
+        asyncio.run(auth.start())
+        assert (
+            auth.validate_credentials("user", "a" * 16) == "init"
+        )
+        with pytest.raises(AuthenticationError):
+            auth.validate_credentials("bad", "wrong")
+        asyncio.run(auth.stop())
+
+
+def test_auth_token_endpoint(dummy_config):
+    responses = {
+        login_url(dummy_config): [MockResponse(200, {"success": True, "token": "init"})]
+    }
+    session = MockSession(responses)
+    with patch("aiohttp.ClientSession", return_value=session):
+        auth = AuthManager(dummy_config)
+        asyncio.run(auth.start())
+
+        class DummyOrch:
+            def __init__(self, auth_manager):
+                self.auth_manager = auth_manager
+                self.event_bus = EventBus()
+
+        server = APIServer(DummyOrch(auth))
+        client = TestClient(server.app)
+
+        resp = client.post(
+            "/auth/token",
+            json={"username": "user", "api_key": "a" * 16},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["token"] == "init"
+
+        resp = client.post(
+            "/auth/token",
+            json={"username": "bad", "api_key": "wrong"},
+        )
+        assert resp.status_code == 401
+
+        asyncio.run(auth.stop())

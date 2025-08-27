@@ -3,12 +3,13 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Dict, Optional
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from pydantic import BaseModel
 import uvicorn
 
 from topstepx_backend.core.service import Service
 from topstepx_backend.api.ws_gateway import WebSocketGateway
+from topstepx_backend.auth.auth_manager import AuthenticationError
 
 if False:  # pragma: no cover - for type checking only
     from topstepx_backend.orchestrator import TopstepXOrchestrator
@@ -43,6 +44,19 @@ class StrategyResponse(BaseModel):
     """Response schema for strategy operations."""
 
     status: str
+
+
+class TokenRequest(BaseModel):
+    """Request schema for token issuance."""
+
+    username: str
+    api_key: str
+
+
+class TokenResponse(BaseModel):
+    """Response schema containing issued token."""
+
+    token: str
 
 
 class APIServer(Service):
@@ -89,6 +103,17 @@ class APIServer(Service):
         async def remove_strategy(strategy_id: str) -> StrategyResponse:
             await self.orchestrator.remove_strategy(strategy_id)
             return StrategyResponse(status="removed")
+
+        @self.app.post("/auth/token", response_model=TokenResponse)
+        async def auth_token(request: TokenRequest) -> TokenResponse:
+            try:
+                token = self.orchestrator.auth_manager.validate_credentials(
+                    request.username, request.api_key
+                )
+            except AuthenticationError:
+                raise HTTPException(status_code=401, detail='Invalid credentials')
+            return TokenResponse(token=token)
+
 
         async def _ws_handler(
             websocket: WebSocket, token: str, path_patterns: str = ""
