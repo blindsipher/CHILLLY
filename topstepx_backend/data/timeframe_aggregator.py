@@ -10,6 +10,9 @@ from topstepx_backend.config.settings import TopstepConfig
 from topstepx_backend.data.types import Bar
 from topstepx_backend.core.event_bus import EventBus
 from topstepx_backend.core.topics import market_bar, boundary, persist_bar_save
+from topstepx_backend.auth.auth_manager import AuthManager
+from topstepx_backend.networking.rate_limiter import RateLimiter
+from topstepx_backend.data.historical_fetcher import HistoricalFetcher, HistoricalRequest
 
 
 @dataclass
@@ -501,19 +504,13 @@ class TimeframeAggregator:
     async def warmup_historical_data(
         self, contracts: List[str], timeframes: List[str], bars_count: int = None
     ):
-        """
-        Warmup aggregations with historical data to provide context for indicators.
-
-        Args:
-            contracts: List of contract IDs to warm up
-            timeframes: List of timeframes to warm up (must be in SUPPORTED_TIMEFRAMES)
-            bars_count: Number of historical bars to load (default: self._warmup_bars)
-
-        Note: This is a framework for future implementation.
-        Actual warmup would require coordination with PersistenceService or HistoricalFetcher.
-        """
+        """Warmup aggregations with historical data to provide context for indicators."""
         if not self._warmup_enabled:
             self.logger.info("Historical warmup disabled - skipping")
+            return
+
+        if not self._event_bus:
+            self.logger.warning("Event bus not available - cannot warmup")
             return
 
         bars_count = bars_count or self._warmup_bars
@@ -531,14 +528,112 @@ class TimeframeAggregator:
             f"{len(timeframes)} timeframes, {bars_count} bars each"
         )
 
-        # TODO: Implement actual warmup logic
-        # This would involve:
-        # 1. Query PersistenceService for historical bars
-        # 2. Populate aggregation states with historical data
-        # 3. Ensure proper sequencing with live data
-        # 4. Emit warmup bars to EventBus for strategy consumption
+        auth_manager = AuthManager(self.config)
+        rate_limiter = RateLimiter()
+        fetcher = HistoricalFetcher(self.config, auth_manager, rate_limiter, self._event_bus)
 
-        self.logger.info("Historical warmup completed (framework placeholder)")
+        subscription = None
+        try:
+            await auth_manager.start()
+            await fetcher.start()
+
+            subscription = await self._event_bus.subscribe(
+                persist_bar_save(), critical=False, maxsize=bars_count * 10
+            )
+
+            for contract in contracts:
+                try:
+                    end_time = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+                    start_time = end_time - timedelta(minutes=bars_count)
+                    request = HistoricalRequest(
+                        contract_id=contract,
+                        start_date=start_time,
+                        end_date=end_time,
+                        timeframe="1m",
+                        priority=1,
+                    )
+
+                    success = await fetcher._fetch_historical_data(request)
+                    if not success:
+                        self.logger.error(
+                            f"Failed to fetch historical bars for {contract}"
+                        )
+                        continue
+
+                    processed = 0
+                    while processed < bars_count:
+                        try:
+                            topic, payload = await asyncio.wait_for(
+                                subscription.__anext__(), timeout=5
+                            )
+                        except asyncio.TimeoutError:
+                            self.logger.warning(
+                                f"Timeout waiting for historical bars for {contract}"
+                            )
+                            break
+
+                        if (
+                            payload.get("contract_id") != contract
+                            or payload.get("timeframe") != "1m"
+                        ):
+                            continue
+
+                        timestamp = payload["timestamp"]
+                        if isinstance(timestamp, str):
+                            timestamp_dt = datetime.fromisoformat(
+                                timestamp.replace("Z", "+00:00")
+                            )
+                        else:
+                            timestamp_dt = timestamp
+
+                        bar = Bar(
+                            timestamp=timestamp_dt,
+                            contract_id=payload["contract_id"],
+                            timeframe=payload["timeframe"],
+                            open=float(payload["open"]),
+                            high=float(payload["high"]),
+                            low=float(payload["low"]),
+                            close=float(payload["close"]),
+                            volume=int(payload["volume"]),
+                            source=payload.get("source", "historical"),
+                            revision=int(payload.get("revision", 1)),
+                        )
+
+                        for timeframe in timeframes:
+                            await self._update_aggregation(bar, timeframe)
+
+                        await self._event_bus.publish(
+                            market_bar(contract, "1m"), bar.to_dict()
+                        )
+
+                        async with self._stats_lock:
+                            self._stats["bars_aggregated"] += 1
+                            self._stats["last_aggregation"] = datetime.now(timezone.utc)
+                            self._stats["active_states"] = len(self._aggregation_states)
+
+                        processed += 1
+                        if processed % 50 == 0 or processed == bars_count:
+                            self.logger.info(
+                                f"{contract} warmup: processed {processed} bars"
+                            )
+
+                    self.logger.info(
+                        f"Completed warmup for {contract}: {processed} bars"
+                    )
+                except Exception as e:
+                    self.logger.error(
+                        f"Warmup error for {contract}: {e}", exc_info=True
+                    )
+
+        except Exception as e:
+            self.logger.error(f"Historical warmup failed: {e}")
+        finally:
+            if subscription:
+                await self._event_bus.unsubscribe(subscription)
+            await fetcher.stop()
+            await auth_manager.stop()
+
+        self.logger.info("Historical warmup completed")
 
     def enable_warmup(self, enabled: bool = True, bars_count: int = 100):
         """Enable or disable historical warmup."""
