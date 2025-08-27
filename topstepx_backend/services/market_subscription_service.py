@@ -2,6 +2,7 @@
 
 Provides runtime management of which contracts are being polled by PollingBarService.
 Persists subscription state and integrates with EventBus for real-time updates.
+Initial subscriptions are loaded from configuration.
 """
 
 import asyncio
@@ -133,12 +134,12 @@ class MarketSubscriptionService:
             else:
                 self._state = self._create_default_state()
                 await self._save_state()
-    
+
     def _create_default_state(self) -> MarketSubscriptionState:
-        """Create default subscription state with full contractIds."""
+        """Create default subscription state from configuration."""
         return MarketSubscriptionState(
-            active_contracts={"CON.F.US.EP.U25", "CON.F.US.ENQ.U25", "CON.F.US.ERW.U25", "CON.F.US.ETF.U25"},  # Default full contractIds
-            last_updated=utc_now()
+            active_contracts=set(self.config.default_contracts),
+            last_updated=utc_now(),
         )
     
     async def _save_state(self):
