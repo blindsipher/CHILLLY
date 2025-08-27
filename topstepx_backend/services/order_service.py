@@ -808,9 +808,6 @@ class OrderService:
         Validate order intent before building payload.
         Raises ValueError for invalid orders.
         """
-        # Reject UNKNOWN order type
-        if intent.type == OrderType.UNKNOWN:
-            raise ValueError("UNKNOWN order type is not supported by ProjectX Gateway")
         
         # Validate required fields per order type
         if intent.type == OrderType.LIMIT:
@@ -839,7 +836,7 @@ class OrderService:
         self._validate_order_intent(intent)
         
         # Map order type to ProjectX integer values
-        # No UNKNOWN or STOP_LIMIT mappings - will fail fast
+        # No STOP_LIMIT mapping - will fail fast
         type_mapping = {
             OrderType.LIMIT: 1,
             OrderType.MARKET: 2,
