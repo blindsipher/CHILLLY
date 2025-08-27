@@ -11,6 +11,44 @@ Returns system status and metrics reported by the orchestrator.
 }
 ```
 
+## GET `/metrics`
+Retrieve runtime metrics for the orchestrator and all registered strategies.
+
+No authentication is required.
+
+**Response Body**
+```json
+{
+  "running": true,
+  "total_strategies": 2,
+  "running_strategies": 2,
+  "strategies": {
+    "rsi_ema_ES_1m": {
+      "strategy_id": "rsi_ema_ES_1m",
+      "running": true,
+      "initialized": true,
+      "context_metrics": {
+        "account_id": "acct1",
+        "contract_id": "ES",
+        "timeframe": "1m",
+        "order_count": 42
+      }
+    },
+    "donchian_RTY_5m": {
+      "strategy_id": "donchian_RTY_5m",
+      "running": true,
+      "initialized": true,
+      "context_metrics": {
+        "account_id": "acct2",
+        "contract_id": "RTY",
+        "timeframe": "5m",
+        "order_count": 5
+      }
+    }
+  }
+}
+```
+
 ## POST `/orders`
 Submit an order for execution.
 
