@@ -59,6 +59,10 @@ class TokenResponse(BaseModel):
     token: str
 
 
+from topstepx_backend.api.routes.orders import router as orders_router
+from topstepx_backend.api.routes.strategies import router as strategies_router
+
+
 class APIServer(Service):
     """FastAPI based HTTP server exposing orchestrator operations."""
 
@@ -78,6 +82,9 @@ class APIServer(Service):
         self.ws_gateway = WebSocketGateway(
             orchestrator.event_bus, orchestrator.auth_manager
         )
+        self.app.state.orchestrator = orchestrator
+        self.app.include_router(orders_router)
+        self.app.include_router(strategies_router)
 
         self._setup_routes()
 
@@ -88,21 +95,6 @@ class APIServer(Service):
         @self.app.get("/status", response_model=StatusResponse)
         async def status() -> StatusResponse:
             return StatusResponse(**self.orchestrator.get_system_status())
-
-        @self.app.post("/orders", response_model=StatusResponse)
-        async def submit_order(order: OrderRequest) -> StatusResponse:
-            await self.orchestrator.submit_order(order.dict())
-            return StatusResponse(status="submitted")
-
-        @self.app.post("/strategies", response_model=StrategyResponse)
-        async def add_strategy(config: Dict[str, Any]) -> StrategyResponse:
-            await self.orchestrator.add_strategy(config)
-            return StrategyResponse(status="added")
-
-        @self.app.delete("/strategies/{strategy_id}", response_model=StrategyResponse)
-        async def remove_strategy(strategy_id: str) -> StrategyResponse:
-            await self.orchestrator.remove_strategy(strategy_id)
-            return StrategyResponse(status="removed")
 
         @self.app.post("/auth/token", response_model=TokenResponse)
         async def auth_token(request: TokenRequest) -> TokenResponse:
