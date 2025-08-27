@@ -55,7 +55,12 @@ class APIServer:
             """Submit an order via the event bus."""
             if not self.orchestrator.event_bus:
                 raise HTTPException(status_code=503, detail="Event bus unavailable")
-            await self.orchestrator.event_bus.publish(order_request_submit(), order.dict())
+            payload = (
+                order.model_dump() if hasattr(order, "model_dump") else order.dict()
+            )
+            await self.orchestrator.event_bus.publish(
+                order_request_submit(), payload
+            )
             return {"status": "submitted"}
 
         @self.app.get("/chart/{contract_id}/{timeframe}")
@@ -76,11 +81,16 @@ class APIServer:
     # ------------------------------------------------------------------
     async def start(self) -> None:
         """Start the Uvicorn server in the background."""
-        config = uvicorn.Config(self.app, host=self.host, port=self.port, log_level="info", loop="asyncio")
+        config = uvicorn.Config(
+            self.app, host=self.host, port=self.port, log_level="info", loop="asyncio"
+        )
         self._server = uvicorn.Server(config)
         self._task = asyncio.create_task(self._server.serve())
-        # Give server a moment to start
-        await asyncio.sleep(0)
+        # Wait for the server to start or fail
+        while not self._server.started and not self._task.done():
+            await asyncio.sleep(0.05)
+        if self._task.done() and self._task.exception():
+            raise self._task.exception()
 
     async def stop(self) -> None:
         """Stop the Uvicorn server."""
@@ -90,3 +100,4 @@ class APIServer:
             await self._task
             self._task = None
         self._server = None
+

@@ -315,7 +315,7 @@ class TopstepXOrchestrator:
             self._health_check_task = asyncio.create_task(self._health_check_loop())
 
             # Start API server
-            from topstepx_backend.api.server import APIServer
+            from topstepx_backend.api import APIServer
 
             self.api_server = APIServer(self)
             await self.api_server.start()
