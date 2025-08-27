@@ -61,6 +61,9 @@ class TokenResponse(BaseModel):
 
 from topstepx_backend.api.routes.orders import router as orders_router
 from topstepx_backend.api.routes.strategies import router as strategies_router
+from topstepx_backend.api.routes.account import router as account_router
+from topstepx_backend.api.routes.market_data import router as market_data_router
+from topstepx_backend.api.routes.system import router as system_router
 
 
 class APIServer(Service):
@@ -85,6 +88,9 @@ class APIServer(Service):
         self.app.state.orchestrator = orchestrator
         self.app.include_router(orders_router)
         self.app.include_router(strategies_router)
+        self.app.include_router(account_router)
+        self.app.include_router(market_data_router)
+        self.app.include_router(system_router)
 
         self._setup_routes()
 
