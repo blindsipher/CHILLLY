@@ -37,3 +37,101 @@ strategies:
       max_daily_loss: 750.0
       max_order_size: 1
       max_orders_per_minute: 3
+
+  # Moving Average Crossover Strategy
+  - strategy_id: "ma_crossover_generic"
+    class: "strategies.moving_average_crossover.MovingAverageCrossoverStrategy"
+    account_id: 123456
+    contract_id: "ESU5"
+    timeframe: "5m"
+    params:
+      fast_period: 10
+      slow_period: 30
+      position_size: 1
+    risk:
+      max_position_size: 2
+      max_daily_loss: 500.0
+      max_order_size: 1
+      max_orders_per_minute: 5
+
+
+  # Bollinger Band Mean Reversion
+  - strategy_id: "bollinger_reversion_generic"
+    class: "strategies.bollinger_reversion.BollingerReversionStrategy"
+    account_id: 123456
+    contract_id: "NQU5"
+    timeframe: "1m"
+    params:
+      period: 20
+      num_std: 2
+      position_size: 1
+    risk:
+      max_position_size: 2
+      max_daily_loss: 500.0
+      max_order_size: 1
+      max_orders_per_minute: 5
+
+  # VWAP Mean Reversion
+  - strategy_id: "vwap_reversion_generic"
+    class: "strategies.vwap_reversion.VWAPReversionStrategy"
+    account_id: 123456
+    contract_id: "CLV5"
+    timeframe: "1m"
+    params:
+      deviation_ticks: 4
+      tick_size: 0.01
+      position_size: 1
+    risk:
+      max_position_size: 2
+      max_daily_loss: 500.0
+      max_order_size: 1
+      max_orders_per_minute: 5
+
+  # Opening Range Breakout
+  - strategy_id: "opening_range_generic"
+    class: "strategies.opening_range_breakout.OpeningRangeBreakoutStrategy"
+    account_id: 123456
+    contract_id: "GCZ5"
+    timeframe: "1m"
+    params:
+      range_minutes: 30
+      position_size: 1
+    risk:
+      max_position_size: 2
+      max_daily_loss: 500.0
+      max_order_size: 1
+      max_orders_per_minute: 5
+
+  # MACD Trend Strategy
+  - strategy_id: "macd_trend_generic"
+    class: "strategies.macd_trend.MACDTrendStrategy"
+    account_id: 123456
+    contract_id: "YMZ5"
+    timeframe: "5m"
+    params:
+      fast_period: 12
+      slow_period: 26
+      signal_period: 9
+      position_size: 1
+    risk:
+      max_position_size: 2
+      max_daily_loss: 500.0
+      max_order_size: 1
+      max_orders_per_minute: 5
+
+  # RSI Reversal Strategy
+  - strategy_id: "rsi_reversal_generic"
+    class: "strategies.rsi_reversal.RSIReversalStrategy"
+    account_id: 123456
+    contract_id: "6EU5"
+    timeframe: "1m"
+    params:
+      period: 14
+      overbought: 70
+      oversold: 30
+      position_size: 1
+    risk:
+      max_position_size: 2
+      max_daily_loss: 500.0
+      max_order_size: 1
+      max_orders_per_minute: 5
