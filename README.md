@@ -49,7 +49,6 @@ Independent services communicate exclusively via events:
 - `topstepx_backend/networking` – SignalR hub agents, API helpers, and rate limiter.
 - `topstepx_backend/services` – persistence, order management, contract discovery, series caching, and subscription management.
 - `topstepx_backend/strategy` – base strategy interfaces, runtime context, registry, examples, and runner.
-- `run_demo.py` – interactive demo for manual testing.
 - `tests` – pytest suite for core components.
 
 ## Configuration
@@ -74,12 +73,6 @@ The orchestrator starts all services and strategy runner:
 python -m topstepx_backend.orchestrator
 ```
 
-For a lightweight demo that authenticates, subscribes to a contract, and optionally places a trade:
-
-```
-python run_demo.py
-```
-
 ## Writing Strategies
 Strategies reside in `topstepx_backend/strategy`. To build your own algorithm:
 
@@ -88,6 +81,11 @@ Strategies reside in `topstepx_backend/strategy`. To build your own algorithm:
 2. Register it with `register_strategy` so the orchestrator can discover it.
 3. The strategy receives events from the `EventBus` and can publish order
    requests which the `OrderService` forwards to TopstepX.
+
+Each strategy declares a single `contract_id` and `timeframe`. The
+`StrategyRunner` routes only the appropriate market bars and boundary events to
+that strategy, allowing multiple strategies to operate concurrently on different
+markets or timeframes without interference.
 
 See `topstepx_backend/strategy/examples` for simple templates.
 
