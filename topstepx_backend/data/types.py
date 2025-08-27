@@ -59,7 +59,6 @@ class OrderType(Enum):
     Note: ProjectX Gateway does not support type 0 or type 3 (Stop-Limit)
     """
 
-    UNKNOWN = "Unknown"  # DEPRECATED - Not a valid ProjectX order type, will be rejected
     LIMIT = "Limit"  # 1 - Limit order
     MARKET = "Market"  # 2 - Market order
     # STOP_LIMIT removed - Not supported by ProjectX Gateway API
