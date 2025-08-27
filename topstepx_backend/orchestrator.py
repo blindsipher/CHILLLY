@@ -28,6 +28,7 @@ from topstepx_backend.services.persistence import PersistenceService
 from topstepx_backend.services.order_service import OrderService
 from topstepx_backend.services.series_cache_service import SeriesCacheService
 from topstepx_backend.services.market_subscription_service import MarketSubscriptionService
+from topstepx_backend.services.contract_service import ContractService
 from topstepx_backend.strategy.runner import StrategyRunner
 from topstepx_backend.strategy.registry import StrategyRegistry
 from topstepx_backend.networking.subscription_manager import SubscriptionManager
@@ -124,6 +125,7 @@ class TopstepXOrchestrator:
         self.polling_bar_service: Optional[PollingBarService] = None
         self.historical_fetcher: Optional[HistoricalFetcher] = None
         self.timeframe_aggregator: Optional[TimeframeAggregator] = None
+        self.contract_service: Optional[ContractService] = None
         # Coordinates dynamic market data subscriptions
         self.market_subscription_service: Optional[MarketSubscriptionService] = None
         self.series_cache_service: Optional[SeriesCacheService] = None
@@ -197,11 +199,14 @@ class TopstepXOrchestrator:
             self.subscription_manager = SubscriptionManager(self.rate_limiter)
 
             # --- Data sourcing and transformation services ---
+            self.contract_service = ContractService(
+                self.config, self.auth_manager, self.rate_limiter
+            )
             self.timeframe_aggregator = TimeframeAggregator(
                 self.config, self.event_bus
             )
             self.market_subscription_service = MarketSubscriptionService(
-                self.config, self.event_bus
+                self.config, self.event_bus, self.contract_service
             )
             self.historical_fetcher = HistoricalFetcher(
                 self.config, self.auth_manager, self.rate_limiter, self.event_bus
@@ -246,6 +251,7 @@ class TopstepXOrchestrator:
                 self.event_bus,
                 self.clock,
                 self.persistence,
+                self.contract_service,
                 self.timeframe_aggregator,
                 self.market_subscription_service,
                 self.historical_fetcher,
