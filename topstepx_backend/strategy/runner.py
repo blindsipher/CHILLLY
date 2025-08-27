@@ -2,15 +2,26 @@
 
 import asyncio
 import logging
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Dict, List, Optional, Any, Tuple, Set, TYPE_CHECKING
 from dataclasses import dataclass
 
 from topstepx_backend.core.event_bus import EventBus, Subscription
-from topstepx_backend.core.topics import market_bar, boundary
+from topstepx_backend.core.topics import (
+    market_bar,
+    boundary,
+    strategy_add,
+    strategy_remove,
+)
 from topstepx_backend.strategy.base import Strategy
 from topstepx_backend.strategy.context import StrategyContext, RiskLimits
 from topstepx_backend.strategy.registry import StrategyRegistry
 from topstepx_backend.data.types import Bar
+
+if TYPE_CHECKING:
+    from topstepx_backend.services.market_subscription_service import (
+        MarketSubscriptionService,
+    )
+    from topstepx_backend.data.timeframe_aggregator import TimeframeAggregator
 
 
 @dataclass
@@ -37,7 +48,11 @@ class StrategyRunner:
     """
 
     def __init__(
-        self, event_bus: EventBus, registry: Optional[StrategyRegistry] = None
+        self,
+        event_bus: EventBus,
+        registry: Optional[StrategyRegistry] = None,
+        market_subscription_service: Optional["MarketSubscriptionService"] = None,
+        timeframe_aggregator: Optional["TimeframeAggregator"] = None,
     ):
         """
         Initialize strategy runner.
@@ -48,6 +63,8 @@ class StrategyRunner:
         """
         self.event_bus = event_bus
         self.registry = registry or StrategyRegistry()
+        self.market_subscription_service = market_subscription_service
+        self.timeframe_aggregator = timeframe_aggregator
         self.logger = logging.getLogger(__name__)
 
         # Strategy instances
@@ -56,6 +73,7 @@ class StrategyRunner:
 
         # Event processing tasks
         self._consumer_tasks: List[asyncio.Task] = []
+        self._mgmt_subscriptions: List[Subscription] = []
 
     async def start(self) -> None:
         """Start the strategy runner and all configured strategies."""
@@ -69,8 +87,14 @@ class StrategyRunner:
             # Load strategy configurations and create instances
             await self._load_and_create_strategies()
 
+            # Register contracts with external services
+            await self._register_active_contracts()
+
             # Start all strategies
             await self._start_all_strategies()
+
+            # Subscribe to management events
+            await self._setup_management_subscriptions()
 
             self._running = True
             self.logger.info(
@@ -101,6 +125,10 @@ class StrategyRunner:
 
         # Stop all strategies
         await self._stop_all_strategies()
+        # Unsubscribe from management topics
+        for sub in self._mgmt_subscriptions:
+            await self.event_bus.unsubscribe(sub)
+        self._mgmt_subscriptions.clear()
 
         self.logger.info("StrategyRunner stopped")
 
@@ -443,3 +471,123 @@ class StrategyRunner:
             (strategy_id, instance.running)
             for strategy_id, instance in self._strategies.items()
         ]
+
+    # ------------------------------------------------------------------
+    # Management event handlers
+    # ------------------------------------------------------------------
+
+    async def _setup_management_subscriptions(self) -> None:
+        """Subscribe to add/remove strategy events."""
+        add_sub = await self.event_bus.subscribe(
+            strategy_add(), critical=True, maxsize=100
+        )
+        remove_sub = await self.event_bus.subscribe(
+            strategy_remove(), critical=True, maxsize=100
+        )
+        self._mgmt_subscriptions.extend([add_sub, remove_sub])
+        self._consumer_tasks.append(
+            asyncio.create_task(self._consume_strategy_add_events(add_sub))
+        )
+        self._consumer_tasks.append(
+            asyncio.create_task(self._consume_strategy_remove_events(remove_sub))
+        )
+
+    async def _consume_strategy_add_events(self, subscription: Subscription) -> None:
+        """Consume strategy addition events."""
+        try:
+            async for _, payload in subscription:
+                if not self._running:
+                    break
+                if isinstance(payload, dict):
+                    await self.add_strategy(payload)
+        except asyncio.CancelledError:
+            pass
+
+    async def _consume_strategy_remove_events(
+        self, subscription: Subscription
+    ) -> None:
+        """Consume strategy removal events."""
+        try:
+            async for _, payload in subscription:
+                if not self._running:
+                    break
+                strategy_id = (
+                    payload.get("strategy_id")
+                    if isinstance(payload, dict)
+                    else str(payload)
+                )
+                if strategy_id:
+                    await self.remove_strategy(strategy_id)
+        except asyncio.CancelledError:
+            pass
+
+    async def add_strategy(self, config: Dict[str, Any]) -> None:
+        """Add and start a new strategy at runtime."""
+        strategy_id = config.get("strategy_id")
+        if not strategy_id or strategy_id in self._strategies:
+            return
+
+        self.registry.add_or_update_config(config)
+        await self._create_strategy_instance(config)
+        instance = self._strategies.get(strategy_id)
+        if not instance:
+            return
+
+        # Register contract with services before starting
+        await self._register_contract(config.get("contract_id"))
+
+        await self._start_strategy_instance(strategy_id, instance)
+
+    async def remove_strategy(self, strategy_id: str) -> None:
+        """Stop and remove a strategy at runtime."""
+        instance = self._strategies.get(strategy_id)
+        if not instance:
+            return
+
+        await self._stop_strategy_instance(strategy_id, instance)
+        del self._strategies[strategy_id]
+        self.registry.remove_strategy_config(strategy_id)
+
+        await self._unregister_contract(instance.config.get("contract_id"))
+
+    async def _register_active_contracts(self) -> None:
+        """Register all current strategy contracts with external services."""
+        contracts = {inst.config.get("contract_id") for inst in self._strategies.values()}
+        for contract in contracts:
+            await self._register_contract(contract)
+
+    async def _register_contract(self, contract_id: Optional[str]) -> None:
+        if not contract_id:
+            return
+        if self.market_subscription_service:
+            try:
+                await self.market_subscription_service.add_subscription(contract_id)
+            except Exception as e:
+                self.logger.error(f"Failed to add subscription for {contract_id}: {e}")
+        if self.timeframe_aggregator:
+            watchlist = self.timeframe_aggregator.get_watchlist() or []
+            if contract_id not in watchlist:
+                watchlist.append(contract_id)
+                self.timeframe_aggregator.update_watchlist(watchlist)
+
+    async def _unregister_contract(self, contract_id: Optional[str]) -> None:
+        if not contract_id:
+            return
+        # Only remove if no strategies still use the contract
+        still_used = any(
+            inst.config.get("contract_id") == contract_id
+            for inst in self._strategies.values()
+        )
+        if still_used:
+            return
+
+        if self.market_subscription_service:
+            try:
+                await self.market_subscription_service.remove_subscription(contract_id)
+            except Exception as e:
+                self.logger.error(
+                    f"Failed to remove subscription for {contract_id}: {e}"
+                )
+        if self.timeframe_aggregator:
+            remaining = [inst.config.get("contract_id") for inst in self._strategies.values()]
+            self.timeframe_aggregator.update_watchlist(remaining)

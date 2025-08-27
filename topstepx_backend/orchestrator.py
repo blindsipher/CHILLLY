@@ -17,6 +17,7 @@ from topstepx_backend.networking.market_hub_agent import MarketHubAgent
 from topstepx_backend.networking.user_hub_agent import UserHubAgent
 from topstepx_backend.networking.rate_limiter import RateLimiter
 from topstepx_backend.core.event_bus import EventBus
+from topstepx_backend.core.topics import strategy_add, strategy_remove
 from topstepx_backend.core.clock import SystemClock
 from topstepx_backend.services.persistence import PersistenceService
 from topstepx_backend.services.order_service import OrderService
@@ -254,9 +255,14 @@ class TopstepXOrchestrator:
             await self.order_service.start()
             self.health_monitor.update_component_health("order_service", "healthy")
 
-            # Initialize strategy runner
+            # Initialize strategy runner with dynamic strategy support
             registry = StrategyRegistry()
-            self.strategy_runner = StrategyRunner(self.event_bus, registry)
+            self.strategy_runner = StrategyRunner(
+                self.event_bus,
+                registry,
+                market_subscription_service=self.market_subscription_service,
+                timeframe_aggregator=self.timeframe_aggregator,
+            )
             await self.strategy_runner.start()
             self.health_monitor.update_component_health("strategy_runner", "healthy")
 
@@ -327,6 +333,20 @@ class TopstepXOrchestrator:
                     self.logger.error("Error stopping %s: %s", service_name, e)
 
         self.logger.info("TopstepX backend orchestrator shutdown complete")
+
+    async def add_strategy(self, config: Dict[str, Any]) -> None:
+        """Publish a request to add a strategy at runtime."""
+        if not self.event_bus:
+            return
+        await self.event_bus.publish(strategy_add(), config)
+
+    async def remove_strategy(self, strategy_id: str) -> None:
+        """Publish a request to remove a strategy at runtime."""
+        if not self.event_bus:
+            return
+        await self.event_bus.publish(
+            strategy_remove(), {"strategy_id": strategy_id}
+        )
 
     async def _health_check_loop(self):
         """Periodic health check loop."""
