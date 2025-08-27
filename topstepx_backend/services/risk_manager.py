@@ -31,6 +31,10 @@ class RiskManager(Service):
         self._subscriptions: list[Subscription] = []
         self._tasks: list[asyncio.Task] = []
 
+    def _close_subscription(self, sub: Subscription) -> None:
+        """Close a subscription synchronously."""
+        sub.close()
+
     async def start(self) -> None:
         """Subscribe to necessary topics."""
         fill_sub = await self.event_bus.subscribe(
@@ -56,7 +60,7 @@ class RiskManager(Service):
                 pass
         self._tasks.clear()
         for sub in self._subscriptions:
-            await sub.close()
+            self._close_subscription(sub)
         self._subscriptions.clear()
         self.logger.info("Risk manager stopped")
 
