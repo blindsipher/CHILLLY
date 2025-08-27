@@ -55,8 +55,11 @@ class BaseProfile(BaseSettings):
         default_path = os.path.join(os.path.dirname(__file__), f"{env}.yaml")
         yaml_path = os.getenv("CONFIG_YAML", default_path)
         if os.path.exists(yaml_path):
-            with open(yaml_path, "r", encoding="utf-8") as f:
-                return yaml.safe_load(f) or {}
+            try:
+                with open(yaml_path, "r", encoding="utf-8") as f:
+                    return yaml.safe_load(f) or {}
+            except yaml.YAMLError:
+                return {}
         return {}
 
     class Config:

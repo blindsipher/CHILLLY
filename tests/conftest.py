@@ -4,7 +4,7 @@ from pathlib import Path
 # Ensure repository root in path
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-# Minimal aiohttp, dotenv, yaml, pydantic, and pysignalr stubs for tests
+# Minimal aiohttp, dotenv, pydantic, and pysignalr stubs for tests
 class _DummyTimeout:
     def __init__(self, total=None, connect=None):
         self.total = total
@@ -24,7 +24,6 @@ aiohttp_stub = types.SimpleNamespace(
 
 sys.modules.setdefault("aiohttp", aiohttp_stub)
 sys.modules.setdefault("dotenv", types.SimpleNamespace(load_dotenv=lambda *a, **k: None))
-sys.modules.setdefault("yaml", types.SimpleNamespace(safe_load=lambda *a, **k: {}))
 sys.modules.setdefault("pydantic", types.SimpleNamespace(BaseSettings=object, Field=lambda *a, **k: None))
 pysignalr_client = types.SimpleNamespace(SignalRClient=object)
 sys.modules.setdefault("pysignalr", types.SimpleNamespace(client=pysignalr_client))
